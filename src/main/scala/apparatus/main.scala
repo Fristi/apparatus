@@ -2,7 +2,7 @@ package apparatus
 
 import cats.arrow.Profunctor
 import cats.implicits.*
-import cats.{Applicative, Functor, Id}
+import cats.{Applicative, Functor, Id, Monad}
 
 sealed trait FSM[F[_], I, O]
 
@@ -11,6 +11,25 @@ object FSM:
   case class Sequential[F[_], A, B, C](left: FSM[F, A, B], right: FSM[F, B, C]) extends FSM[F, A, C]
   case class Parallel[F[_], A, B, C, D](left: FSM[F, A, B], right: FSM[F, C, D]) extends FSM[F, (A, C), (B, D)]
   case class Alternative[F[_], A, B, C, D](left: FSM[F, A, B], right: FSM[F, C, D]) extends FSM[F, Either[A, C], Either[B, D]]
+
+  def run[F[_] : Monad, I, O](fsm: FSM[F, I, O], input: I): F[(O, FSM[F, I, O])] = fsm match {
+    case Basic(baseMachineT) => baseMachineT.step(input).map((o, s) => (o, FSM.Basic(BaseMachineT(s, (s, i) => baseMachineT.action(s, i)))))
+    case Sequential(left, right) =>
+      for {
+        (o1, fsm1) <- FSM.run(left, input)
+        (o2, fsm2) <- FSM.run(right, o1)
+      } yield (o2, FSM.Sequential(fsm1, fsm2))
+    case Parallel(left, right) =>
+      for {
+        (o1, fsm1) <- FSM.run(left, input._1)
+        (o2, fsm2) <- FSM.run(right, input._2)
+      } yield ((o1, o2), FSM.Parallel(fsm1, fsm2))
+    case Alternative(left, right) =>
+      input match {
+        case Left(l) => ???
+        case Right(r) => ???
+      }
+  }
 
   def statelessBasic[F[_] : Applicative, I, O](f: I => O): FSM[F, I, O] =
     Basic(BaseMachineT.stateless[F, I, O](i => f(i).pure))
@@ -32,14 +51,16 @@ trait BaseMachineT[F[_], I, O] {
   type State
   def initialState: State
   def action(state: State, input: I): F[(O, State)]
+
+  def step(input: I): F[(O, State)] = action(initialState, input)
 }
 
 object BaseMachineT {
 
-  def apply[F[_], S, I, O](initialState: S, f: (S, I) => F[(O, S)]): BaseMachineT[F, I, O] =
+  def apply[F[_], S, I, O](seed: S, f: (S, I) => F[(O, S)]): BaseMachineT[F, I, O] =
     new BaseMachineT[F, I, O] {
       type State = S
-      override def initialState: S = initialState
+      override def initialState: S = seed
       override def action(state: S, input: I): F[(O, S)] = f(state, input)
     }
 
@@ -115,8 +136,33 @@ val door: Decider[DoorState, DoorCommand, List[DoorEvent]] = Decider[DoorState, 
   })
 )
 
-val doorFSM: FSM.Basic[Id, DoorCommand, List[DoorEvent]] = FSM.Basic(door.toBaseMachine)
+case class DoorStats(opened: Int, closed: Int) {
+  def incrOpended = copy(opened = opened + 1)
+  def incrClosed = copy(closed = closed + 1)
+}
+
+val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
+  BaseMachineT.apply[Id, DoorStats, List[DoorEvent], DoorStats](DoorStats(0, 0), (s, i) => {
+    val res = i.foldLeft(s)((s: DoorStats, i: DoorEvent) => i match {
+      case DoorEvent.Opened => s.incrOpended
+      case DoorEvent.Closed => s.incrClosed
+      case _ => s
+    })
+
+    (res, res).pure
+  })
+
+val doorFSM: FSM[Id, DoorCommand, List[DoorEvent]] = FSM.Basic(door.toBaseMachine)
+val projection: FSM[Id, List[DoorEvent], DoorStats] = FSM.Basic(doorProject)
+
+val network = FSM.Sequential(doorFSM, projection)
 
 
+@main def hello() = {
+  val (_, fsm1) = FSM.run(network, DoorCommand.Knock)
+  val (_, fsm2) = FSM.run(fsm1, DoorCommand.Knock)
+  val (_, fsm3) = FSM.run(fsm2, DoorCommand.Knock)
+  val (o, fsm4) = FSM.run(fsm3, DoorCommand.Close)
 
-@main def hello() = println(doorFSM.baseMachineT.action(DoorState.Closed(2).asInstanceOf[doorFSM.baseMachineT.State], DoorCommand.Knock))
+  println(o)
+}
