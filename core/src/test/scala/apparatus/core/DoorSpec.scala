@@ -2,6 +2,7 @@ package apparatus.core
 
 import cats.Id
 import cats.implicits.*
+import cats.kernel.Monoid
 
 // --- Domain model ---
 
@@ -19,8 +20,14 @@ enum DoorEvent:
   case Closed
 
 case class DoorStats(opened: Int, closed: Int):
-  def incrOpened = copy(opened = opened + 1)
-  def incrClosed = copy(closed = closed + 1)
+  def incrOpened: DoorStats = copy(opened = opened + 1)
+  def incrClosed: DoorStats = copy(closed = closed + 1)
+
+object DoorStats:
+  given Monoid[DoorStats]:
+    override def empty: DoorStats = DoorStats(0,0)
+    override def combine(x: DoorStats, y: DoorStats): DoorStats = DoorStats(x.opened.max(y.opened), x.closed.max(y.closed))
+
 
 // --- Fixtures ---
 
@@ -61,10 +68,8 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
 def freshNetwork: FSM[Id, DoorCommand, DoorStats] =
   FSM.Sequential(FSM.Basic(door.toBaseMachine[Id]), FSM.Basic(doorProject))
 
-def runAll[O](fsm: FSM[Id, DoorCommand, O], cmds: DoorCommand*): (O, FSM[Id, DoorCommand, O]) =
-  cmds.foldLeft[(O, FSM[Id, DoorCommand, O])]((null.asInstanceOf[O], fsm)) {
-    case ((_, f), cmd) => FSM.run(f, cmd)
-  }
+def runAll[O : Monoid](fsm: FSM[Id, DoorCommand, O], cmds: DoorCommand*): (O, FSM[Id, DoorCommand, O]) =
+  FSM.runMultiple(fsm, cmds)
 
 // --- Tests ---
 

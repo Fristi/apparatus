@@ -1,8 +1,9 @@
 package apparatus.core
 
-import cats.Monad
+import cats.{Foldable, Monad}
 import cats.arrow.Profunctor
 import cats.implicits.*
+import cats.kernel.Monoid
 
 sealed trait FSM[F[_], I, O]
 
@@ -32,6 +33,11 @@ object FSM:
       input match
         case Left(l)  => run(left, l).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
         case Right(r) => run(right, r).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
+
+  def runMultiple[F[_] : Monad, M[_] : Foldable, I, O : Monoid](fsm: FSM[F, I, O], entries: M[I]): F[(O, FSM[F, I, O])] =
+    entries.foldM((Monoid[O].empty, fsm)) { case ((acc, m), i) =>
+      run(m, i).map((o, nm) => (acc |+| o, nm))
+    }
 
   implicit def profunctor[F[_]: Monad]: Profunctor[[I, O] =>> FSM[F, I, O]] =
     new Profunctor[[I, O] =>> FSM[F, I, O]]:
