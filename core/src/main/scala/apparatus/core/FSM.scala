@@ -57,12 +57,6 @@ object FSM:
       run(m, i).map((o, nm) => (acc |+| o, nm))
     }
 
-  def feedback[F[_], A, B, N[_]: Foldable](
-    left: FSM[F, A, N[B]],
-    right: FSM[F, B, N[A]]
-  )(using Monoid[N[B]], Monoid[N[A]]): FSM[F, A, N[B]] =
-    Feedback(left, right)
-
   implicit def profunctor[F[_]: Monad]: Profunctor[[I, O] =>> FSM[F, I, O]] =
     new Profunctor[[I, O] =>> FSM[F, I, O]]:
 
