@@ -1,6 +1,7 @@
 package apparatus.core
 
 import cats.Monad
+import cats.arrow.Profunctor
 import cats.implicits.*
 
 sealed trait FSM[F[_], I, O]
@@ -31,3 +32,21 @@ object FSM:
       input match
         case Left(l)  => run(left, l).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
         case Right(r) => run(right, r).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
+
+  implicit def profunctor[F[_]: Monad]: Profunctor[[I, O] =>> FSM[F, I, O]] =
+    new Profunctor[[I, O] =>> FSM[F, I, O]]:
+
+      private val bmProfunctor = implicitly[Profunctor[[I, O] =>> BaseMachineT[F, I, O]]]
+
+      private def lmapFSM[A, B, C](fab: FSM[F, A, B])(f: C => A): FSM[F, C, B] = fab match
+        case Basic(m)         => Basic(bmProfunctor.lmap(m)(f))
+        case Sequential(l, r) => Sequential(lmapFSM(l)(f), r)
+        case machine          => Sequential(Basic(BaseMachineT.stateless[F, C, A](c => f(c).pure[F])), machine)
+
+      private def rmapFSM[A, B, C](fab: FSM[F, A, B])(g: B => C): FSM[F, A, C] = fab match
+        case Basic(m)         => Basic(bmProfunctor.rmap(m)(g))
+        case Sequential(l, r) => Sequential(l, rmapFSM(r)(g))
+        case machine          => Sequential(machine, Basic(BaseMachineT.stateless[F, B, C](b => g(b).pure[F])))
+
+      override def dimap[A, B, C, D](fab: FSM[F, A, B])(f: C => A)(g: B => D): FSM[F, C, D] =
+        rmapFSM(lmapFSM(fab)(f))(g)
