@@ -26,6 +26,9 @@ sealed trait FSM[F[_], I, O]:
 
 extension [F[_], A, B](left: FSM[F, A, B]) {
 
+  def imap[A2, B2](using isoIn: Iso[A, A2], isoOut: Iso[B, B2], A: Applicative[F]): FSM[F, A2, B2] =
+    left.lmap(isoIn.from).rmap(isoOut.to)
+
   def andThen[C](right: FSM[F, B, C]): FSM[F, A, C] = FSM.Sequential(left, right)
   def >>>[C](right: FSM[F, B, C]): FSM[F, A, C] = andThen(right)
 
