@@ -2,6 +2,7 @@ package apparatus.core
 
 import cats.Id
 import cats.arrow.Profunctor
+import cats.data.NonEmptyList
 import cats.implicits.*
 
 // --- Service-level types ---
@@ -17,22 +18,28 @@ enum SvcEvt:
 
 // --- Saga-level types ---
 
+enum EntityType:
+  case Car, Flight, Hotel
+
 enum BookingInput:
   case Start
-  case FlightEvt(e: SvcEvt)
-  case CarEvt(e: SvcEvt)
-  case HotelEvt(e: SvcEvt)
+  case ProcessEntity(entityType: EntityType, event: SvcEvt)
 
-enum BookingOutput:
-  case ToFlight(c: SvcCmd)
-  case ToCar(c: SvcCmd)
-  case ToHotel(c: SvcCmd)
+case class BookingOutput(entityType: EntityType, command: SvcCmd)
+
 
 enum SagaPhase:
-  case Waiting
-  case ReservingFlight, ReservingCar, ReservingHotel
-  case CompensatingCar, CompensatingFlight
-  case Succeeded, Failed
+  case Waiting, Succeeded, Failed
+  case Running(todoStack: List[BookingOutput], compensationStack: List[BookingOutput])
+  case Compensating(compensationStack: List[BookingOutput])
+
+case class SagaStep(doCommand: BookingOutput, undoCommand: BookingOutput)
+
+val flightStep = SagaStep(BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Flight, SvcCmd.Compensate))
+val carStep = SagaStep(BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Compensate))
+val hotelStep = SagaStep(BookingOutput(EntityType.Hotel, SvcCmd.Reserve), BookingOutput(EntityType.Hotel, SvcCmd.Compensate))
+
+val sagaSteps = NonEmptyList.of(flightStep, carStep, hotelStep)
 
 
 // --- Service FSM (Decider-based, stateful) ---
@@ -66,37 +73,67 @@ def makeServices(
                   flight: FSM[Id, SvcCmd, List[SvcEvt]],
                   car: FSM[Id, SvcCmd, List[SvcEvt]],
                   hotel: FSM[Id, SvcCmd, List[SvcEvt]]
-                ): FSM[Id, BookingOutput, List[BookingInput]] = {
-  val alt = FSM.Alternative(flight, FSM.Alternative(car, hotel))
-  Profunctor[[I, O] =>> FSM[Id, I, O]].dimap(alt)(
-    (out: BookingOutput) => out match
-      case BookingOutput.ToFlight(c) => Left(c)
-      case BookingOutput.ToCar(c) => Right(Left(c))
-      case BookingOutput.ToHotel(c) => Right(Right(c))
+                ): FSM[Id, BookingOutput, List[BookingInput]] =
+  flight.or(car.or(hotel)).dimap(
+    (out: BookingOutput) => out.entityType match
+      case EntityType.Flight => Left(out.command)
+      case EntityType.Car => Right(Left(out.command))
+      case EntityType.Hotel => Right(Right(out.command))
   ) {
-    case Left(evts) => evts.map(BookingInput.FlightEvt(_))
-    case Right(Left(evts)) => evts.map(BookingInput.CarEvt(_))
-    case Right(Right(evts)) => evts.map(BookingInput.HotelEvt(_))
+    case Left(evts) => evts.map(BookingInput.ProcessEntity(EntityType.Flight, _))
+    case Right(Left(evts)) => evts.map(BookingInput.ProcessEntity(EntityType.Car, _))
+    case Right(Right(evts)) => evts.map(BookingInput.ProcessEntity(EntityType.Hotel, _))
   }
-}
+
+def next(phase: SagaPhase, input: BookingInput): (List[BookingOutput], SagaPhase) =
+  (phase, input) match
+
+    case (SagaPhase.Waiting, BookingInput.Start) =>
+      val NonEmptyList(first, rest) = sagaSteps
+      (
+        List(first.doCommand),
+        SagaPhase.Running(
+          todoStack = rest.map(_.doCommand),
+          compensationStack = List(first.undoCommand)
+        )
+      )
+
+    case (SagaPhase.Running(todo, comp), BookingInput.ProcessEntity(_, SvcEvt.Reserved)) =>
+      todo match
+        case nextCmd :: remaining =>
+          val nextUndo = sagaSteps.find(_.doCommand == nextCmd).get.undoCommand
+          (
+            List(nextCmd),
+            SagaPhase.Running(
+              todoStack = remaining,
+              compensationStack = nextUndo :: comp
+            )
+          )
+
+        case Nil =>
+          (Nil, SagaPhase.Succeeded)
+
+    case (SagaPhase.Running(_, comp), BookingInput.ProcessEntity(_, SvcEvt.Failed)) =>
+      (
+        comp.headOption.toList,
+        SagaPhase.Compensating(comp)
+      )
+
+    case (SagaPhase.Compensating(comp), BookingInput.ProcessEntity(_, SvcEvt.Reserved)) =>
+      comp match
+        case _ :: rest =>
+          rest match
+            case nextUndo :: _ => (List(nextUndo), SagaPhase.Compensating(rest))
+            case Nil => (Nil, SagaPhase.Failed)
+
+        case Nil => (Nil, SagaPhase.Failed)
+
+    case _ => (Nil, phase)
 
 // --- Orchestrator ---
 
 val orchestrator: FSM[Id, BookingInput, List[BookingOutput]] =
-  FSM.Basic(BaseMachineT[Id, SagaPhase, BookingInput, List[BookingOutput]](
-    SagaPhase.Waiting,
-    (phase, input) => (phase, input) match
-      case (SagaPhase.Waiting, BookingInput.Start) => (List(BookingOutput.ToFlight(SvcCmd.Reserve)), SagaPhase.ReservingFlight)
-      case (SagaPhase.ReservingFlight, BookingInput.FlightEvt(SvcEvt.Reserved)) => (List(BookingOutput.ToCar(SvcCmd.Reserve)), SagaPhase.ReservingCar)
-      case (SagaPhase.ReservingCar, BookingInput.CarEvt(SvcEvt.Reserved)) => (List(BookingOutput.ToHotel(SvcCmd.Reserve)), SagaPhase.ReservingHotel)
-      case (SagaPhase.ReservingHotel, BookingInput.HotelEvt(SvcEvt.Reserved)) => (Nil, SagaPhase.Succeeded)
-      case (SagaPhase.ReservingFlight, BookingInput.FlightEvt(SvcEvt.Failed)) => (Nil, SagaPhase.Failed)
-      case (SagaPhase.ReservingCar, BookingInput.CarEvt(SvcEvt.Failed)) => (List(BookingOutput.ToFlight(SvcCmd.Compensate)), SagaPhase.CompensatingFlight)
-      case (SagaPhase.ReservingHotel, BookingInput.HotelEvt(SvcEvt.Failed)) => (List(BookingOutput.ToCar(SvcCmd.Compensate)), SagaPhase.CompensatingCar)
-      case (SagaPhase.CompensatingCar, BookingInput.CarEvt(SvcEvt.Compensated)) => (List(BookingOutput.ToFlight(SvcCmd.Compensate)), SagaPhase.CompensatingFlight)
-      case (SagaPhase.CompensatingFlight, BookingInput.FlightEvt(SvcEvt.Compensated)) => (Nil, SagaPhase.Failed)
-      case _ => (Nil, phase)
-  ))
+  FSM.Basic(BaseMachineT[Id, SagaPhase, BookingInput, List[BookingOutput]](SagaPhase.Waiting, (phase, input) => next(phase, input)))
 
 // --- Tests ---
 
@@ -111,22 +148,22 @@ class BookingSagaSpec extends munit.FunSuite:
 
   test("happy path: full reservation command trail"):
     val (cmds, _) = FSM.run(saga(), BookingInput.Start)
-    assertEquals(cmds, List(BookingOutput.ToFlight(SvcCmd.Reserve), BookingOutput.ToCar(SvcCmd.Reserve), BookingOutput.ToHotel(SvcCmd.Reserve)))
+    assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Hotel, SvcCmd.Reserve)))
 
   test("hotel fails: car and flight compensated in reverse"):
     val (cmds, _) = FSM.run(saga(hotel = serviceDecider(failsOnReserve = true)), BookingInput.Start)
     assertEquals(cmds, List(
-      BookingOutput.ToFlight(SvcCmd.Reserve), BookingOutput.ToCar(SvcCmd.Reserve), BookingOutput.ToHotel(SvcCmd.Reserve),
-      BookingOutput.ToCar(SvcCmd.Compensate), BookingOutput.ToFlight(SvcCmd.Compensate)
+      BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Hotel, SvcCmd.Reserve),
+      BookingOutput(EntityType.Car, SvcCmd.Compensate), BookingOutput(EntityType.Flight, SvcCmd.Compensate)
     ))
 
   test("car fails: only flight compensated"):
     val (cmds, _) = FSM.run(saga(car = serviceDecider(failsOnReserve = true)), BookingInput.Start)
-    assertEquals(cmds, List(BookingOutput.ToFlight(SvcCmd.Reserve), BookingOutput.ToCar(SvcCmd.Reserve), BookingOutput.ToFlight(SvcCmd.Compensate)))
+    assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Flight, SvcCmd.Compensate)))
 
   test("flight fails: nothing to compensate"):
     val (cmds, _) = FSM.run(saga(flight = serviceDecider(failsOnReserve = true)), BookingInput.Start)
-    assertEquals(cmds, List(BookingOutput.ToFlight(SvcCmd.Reserve)))
+    assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve)))
 
   test("service state is respected: Compensate on Idle emits nothing"):
     // hotel fails → ToCar(Compensate) issued, but car is already Idle if it also failed
@@ -139,4 +176,4 @@ class BookingSagaSpec extends munit.FunSuite:
       BookingInput.Start
     )
     // Car fails → compensate flight only (hotel never reached)
-    assertEquals(cmds, List(BookingOutput.ToFlight(SvcCmd.Reserve), BookingOutput.ToCar(SvcCmd.Reserve), BookingOutput.ToFlight(SvcCmd.Compensate)))
+    assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Flight, SvcCmd.Compensate)))

@@ -1,6 +1,6 @@
 package apparatus.core
 
-import cats.{Foldable, Monad, Monoid}
+import cats.{Applicative, Foldable, Monad, Monoid}
 import cats.arrow.Profunctor
 import cats.implicits.*
 
@@ -23,6 +23,34 @@ import cats.implicits.*
 sealed trait FSM[F[_], I, O]:
   /** Advance the machine by one input, returning output and the updated machine. */
   def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])]
+
+extension [F[_], A, B](left: FSM[F, A, B]) {
+
+  def andThen[C](right: FSM[F, B, C]): FSM[F, A, C] = FSM.Sequential(left, right)
+  def >>>[C](right: FSM[F, B, C]): FSM[F, A, C] = andThen(right)
+
+  def par[C, D](right: FSM[F, C, D]): FSM[F, (A, C), (B, D)] = FSM.Parallel(left, right)
+  def ***[C, D](right: FSM[F, C, D]): FSM[F, (A, C), (B, D)] = par(right)
+
+  def or[C, D](right: FSM[F, C, D]): FSM[F, Either[A, C], Either[B, D]] = FSM.Alternative(left, right)
+  def |||[C, D](right: FSM[F, C, D]): FSM[F, Either[A, C], Either[B, D]] = or(right)
+
+  def lmap[C](f: C => A)(using A: Applicative[F]): FSM[F, C, B] =
+    left match
+      case FSM.Basic(m) => FSM.Basic(m.lmap(f))
+      case FSM.Sequential(l, r) => FSM.Sequential(l.lmap(f), r)
+      case machine => FSM.Basic(BaseMachineT.stateless[F, C, A](c => f(c).pure[F])) >>> machine
+
+  def rmap[C](f: B => C)(using A: Applicative[F]): FSM[F, A, C] =
+    left match
+      case FSM.Basic(m) => FSM.Basic(m.rmap(f))
+      case FSM.Sequential(l, r) => FSM.Sequential(l, r.rmap(f))
+      case machine => machine >>> FSM.Basic(BaseMachineT.stateless[F, B, C](b => f(b).pure[F]))
+
+  def dimap[C, D](f: C => A)(g: B => D)(using A: Applicative[F]): FSM[F, C, D] =
+    left.lmap(f).rmap(g)
+
+}
 
 object FSM:
   /** Wraps a single [[BaseMachineT]], threading its internal state across steps. */
@@ -98,18 +126,5 @@ object FSM:
   /** `Profunctor` instance: adapt inputs (`lmap`) and outputs (`rmap`) of any `FSM`. */
   implicit def profunctor[F[_]: Monad]: Profunctor[[I, O] =>> FSM[F, I, O]] =
     new Profunctor[[I, O] =>> FSM[F, I, O]]:
-
-      private val bmProfunctor = implicitly[Profunctor[[I, O] =>> BaseMachineT[F, I, O]]]
-
-      private def lmapFSM[A, B, C](fab: FSM[F, A, B])(f: C => A): FSM[F, C, B] = fab match
-        case Basic(m)         => Basic(bmProfunctor.lmap(m)(f))
-        case Sequential(l, r) => Sequential(lmapFSM(l)(f), r)
-        case machine          => Sequential(Basic(BaseMachineT.stateless[F, C, A](c => f(c).pure[F])), machine)
-
-      private def rmapFSM[A, B, C](fab: FSM[F, A, B])(g: B => C): FSM[F, A, C] = fab match
-        case Basic(m)         => Basic(bmProfunctor.rmap(m)(g))
-        case Sequential(l, r) => Sequential(l, rmapFSM(r)(g))
-        case machine          => Sequential(machine, Basic(BaseMachineT.stateless[F, B, C](b => g(b).pure[F])))
-
       override def dimap[A, B, C, D](fab: FSM[F, A, B])(f: C => A)(g: B => D): FSM[F, C, D] =
-        rmapFSM(lmapFSM(fab)(f))(g)
+        fab.dimap(f)(g)

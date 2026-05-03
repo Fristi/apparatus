@@ -15,7 +15,8 @@ import cats.implicits.*
   * @tparam I input type
   * @tparam O output type
   */
-trait BaseMachineT[F[_], I, O]:
+trait BaseMachineT[F[_], I, O] {
+  self =>
   type State
 
   /** The state the machine starts from. */
@@ -26,6 +27,19 @@ trait BaseMachineT[F[_], I, O]:
 
   /** Convenience: run one step from `initialState`. */
   def step(input: I): F[(O, State)] = action(initialState, input)
+
+  def lmap[H](f: H => I)(using F: Functor[F]): BaseMachineT[F, H, O] = dimap[H, O](f)(identity)
+
+  def rmap[P](f: O => P)(using F: Functor[F]): BaseMachineT[F, I, P] = dimap[I, P](identity)(f)
+
+  def dimap[H, P](f: H => I)(g: O => P)(using F: Functor[F]): BaseMachineT[F, H, P] =
+    new BaseMachineT[F, H, P] {
+      override type State = self.State
+      override def initialState: State = self.initialState
+      override def action(state: State, input: H): F[(P, State)] =
+        self.action(state, f(input)).map { case (b, s) => (g(b), s) }
+    }
+}
 
 object BaseMachineT:
 
@@ -44,8 +58,4 @@ object BaseMachineT:
   implicit def profunctor[F[_]: Functor]: Profunctor[[A, B] =>> BaseMachineT[F, A, B]] =
     new Profunctor[[A, B] =>> BaseMachineT[F, A, B]]:
       override def dimap[A, B, C, D](fab: BaseMachineT[F, A, B])(f: C => A)(g: B => D): BaseMachineT[F, C, D] =
-        new BaseMachineT[F, C, D]:
-          type State = fab.State
-          def initialState = fab.initialState
-          def action(state: State, input: C): F[(D, State)] =
-            fab.action(state, f(input)).map { case (b, s) => (g(b), s) }
+        fab.dimap(f)(g)
