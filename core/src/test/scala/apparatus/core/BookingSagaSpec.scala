@@ -94,19 +94,20 @@ def next(phase: SagaPhase, input: BookingInput): (List[BookingOutput], SagaPhase
         List(first.doCommand),
         SagaPhase.Running(
           todoStack = rest.map(_.doCommand),
-          compensationStack = List(first.undoCommand)
+          compensationStack = Nil
         )
       )
 
-    case (SagaPhase.Running(todo, comp), BookingInput.ProcessEntity(_, SvcEvt.Reserved)) =>
+    case (SagaPhase.Running(todo, comp), BookingInput.ProcessEntity(et, SvcEvt.Reserved)) =>
+      val currentUndo = sagaSteps.find(_.doCommand.entityType == et).get.undoCommand
+      val newComp = currentUndo :: comp
       todo match
         case nextCmd :: remaining =>
-          val nextUndo = sagaSteps.find(_.doCommand == nextCmd).get.undoCommand
           (
             List(nextCmd),
             SagaPhase.Running(
               todoStack = remaining,
-              compensationStack = nextUndo :: comp
+              compensationStack = newComp
             )
           )
 
@@ -119,7 +120,7 @@ def next(phase: SagaPhase, input: BookingInput): (List[BookingOutput], SagaPhase
         SagaPhase.Compensating(comp)
       )
 
-    case (SagaPhase.Compensating(comp), BookingInput.ProcessEntity(_, SvcEvt.Reserved)) =>
+    case (SagaPhase.Compensating(comp), BookingInput.ProcessEntity(_, SvcEvt.Compensated)) =>
       comp match
         case _ :: rest =>
           rest match
