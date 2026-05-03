@@ -12,5 +12,14 @@ lazy val core = (project in file("core"))
     )
   )
 
+lazy val doobie = (project in file("doobie"))
+  .settings(
+    name := "apparatus-doobie",
+    libraryDependencies ++= Seq(
+      "org.tpolecat" %% "doobie-postgres" % "1.0.0-RC12"
+    )
+  )
+  .dependsOn(core)
+
 lazy val root = (project in file("."))
-  .aggregate(core)
+  .aggregate(core, doobie)
