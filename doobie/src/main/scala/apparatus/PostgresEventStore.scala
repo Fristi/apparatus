@@ -25,4 +25,14 @@ case class PostgresEventStore[O : {Read, Write}]() extends EventStore[Connection
   override def appendAggregateStream(id: UUID, events: List[EventEntry[O]]): ConnectionIO[Int] =
     Update[(UUID, EventEntry[O])]("INSERT INTO eventstreams (aggregate_id, sequence_nr, body) VALUES (?, ?, ?)")
       .updateMany(events.map((id, _)))
+
+  override def create(): ConnectionIO[Int] =
+    sql"""
+                 CREATE TABLE IF NOT EXISTS eventstreams (
+                   aggregate_id UUID NOT NULL,
+                   sequence_nr  INT  NOT NULL,
+                   body         TEXT NOT NULL,
+                   PRIMARY KEY (aggregate_id, sequence_nr)
+                 )
+               """.update.run
 }

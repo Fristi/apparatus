@@ -39,14 +39,7 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
 
   val createSchema: ConnectionIO[Unit] =
     for
-      _ <- sql"""
-             CREATE TABLE IF NOT EXISTS eventstreams (
-               aggregate_id UUID NOT NULL,
-               sequence_nr  INT  NOT NULL,
-               body         TEXT NOT NULL,
-               PRIMARY KEY (aggregate_id, sequence_nr)
-             )
-           """.update.run
+      _ <- PostgresEventStore[BankAccountEvent]().create()
       _ <- DoobieBankAccountTransactionRepository.create()
     yield ()
 
