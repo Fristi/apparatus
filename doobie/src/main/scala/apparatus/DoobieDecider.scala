@@ -12,6 +12,7 @@ final case class EventEntry[O](sequenceNr: Int, body: O)
 
 /** Persistence interface for an append-only aggregate event stream. */
 trait EventStore[F[_], O]:
+  def create(): F[Int]
   /** Acquire an advisory lock for `id`; returns `false` if already held. */
   def lockAggregate(id: UUID): F[Boolean]
   /** Load all stored events for `id` in sequence-number order. */

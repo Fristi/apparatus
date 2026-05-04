@@ -29,6 +29,17 @@ sealed trait FSM[F[_], I, O]:
 
 extension [F[_], A, B](left: FSM[F, A, B]) {
 
+  def tap[C](right: FSM[F, B, C]): FSM[F, A, B] =
+    new FSM[F, A, B]:
+      def runWith(input: A)(using Monad[F]): F[(B, FSM[F, A, B])] =
+        for
+          (b, l2) <- left.runWith(input)
+          (_, r2) <- right.runWith(b)
+        yield (b, l2.tap(r2))
+
+      def mapK[G[_]](f: F ~> G): FSM[G, A, B] =
+        left.mapK(f).tap(right.mapK(f))
+
   /** Bidirectional mapping via [[Iso]]: adapt input with `isoIn.from`, output with `isoOut.to`. */
   def imap[A2, B2](using isoIn: Iso[A, A2], isoOut: Iso[B, B2], A: Applicative[F]): FSM[F, A2, B2] =
     left.lmap(isoIn.from).rmap(isoOut.to)
