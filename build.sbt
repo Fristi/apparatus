@@ -1,28 +1,60 @@
-ThisBuild / version := "0.1.0-SNAPSHOT"
+ThisBuild / organization         := "io.github.fristi"
+ThisBuild / organizationName     := "Fristi"
+ThisBuild / licenses             := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / homepage             := Some(url("https://github.com/Fristi/apparatus"))
+ThisBuild / developers           := List(
+  Developer("Fristi", "Mark de Jong", "av3ng3r@gmail.com", url("https://github.com/Fristi"))
+)
+ThisBuild / sonatypeCredentialHost := "central.sonatype.com"
+ThisBuild / sonatypeRepository     := "https://central.sonatype.com/api/v1/publisher"
+ThisBuild / publishTo              := sonatypePublishToBundle.value
+ThisBuild / versionScheme          := Some("early-semver")
+ThisBuild / scmInfo                := Some(
+  ScmInfo(url("https://github.com/Fristi/apparatus"), "scm:git@github.com:Fristi/apparatus.git")
+)
 
-ThisBuild / scalaVersion := "3.8.3"
+def commonSettings = Seq(
+  scalaVersion := "3.8.3"
+)
 
 lazy val core = (project in file("core"))
+  .settings(commonSettings)
   .settings(
     name := "apparatus-core",
     libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-core"        % "2.13.0",
+      "org.typelevel" %% "cats-core"         % "2.13.0",
       "dev.zio"       %% "zio-blocks-schema" % "0.0.33",
-      "org.scalameta" %% "munit"            % "1.3.0" % Test
+      "org.scalameta" %% "munit"             % "1.3.0" % Test
     )
   )
 
 lazy val doobie = (project in file("doobie"))
+  .settings(commonSettings)
   .settings(
     name := "apparatus-doobie",
     libraryDependencies ++= Seq(
-      "org.tpolecat" %% "doobie-postgres"                    % "1.0.0-RC12",
-      "com.dimafeng" %% "testcontainers-scala-postgresql"    % "0.44.1"     % Test,
-      "com.dimafeng" %% "testcontainers-scala-munit"         % "0.44.1"     % Test,
-      "org.typelevel" %% "munit-cats-effect"                 % "2.0.0"      % Test
+      "org.tpolecat" %% "doobie-postgres"                 % "1.0.0-RC12",
+      "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.44.1" % Test,
+      "com.dimafeng" %% "testcontainers-scala-munit"      % "0.44.1" % Test,
+      "org.typelevel" %% "munit-cats-effect"              % "2.0.0"  % Test
     )
   )
   .dependsOn(core)
 
+lazy val docs = project
+  .in(file("docs"))
+  .enablePlugins(MdocPlugin)
+  .dependsOn(core, doobie)
+  .settings(commonSettings)
+  .settings(
+    publish / skip := true,
+    mdocIn         := (ThisBuild / baseDirectory).value / "docs-src",
+    mdocOut        := baseDirectory.value,
+    mdocVariables  := Map("VERSION" -> version.value)
+  )
+
 lazy val root = (project in file("."))
   .aggregate(core, doobie)
+  .settings(
+    publish / skip := true
+  )
