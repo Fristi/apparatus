@@ -3,8 +3,9 @@ package apparatus
 import apparatus.core.*
 import cats.Applicative
 import cats.implicits.*
-import doobie.Meta
-import doobie.free.connection.ConnectionIO
+import doobie.*
+import doobie.implicits.*
+import doobie.postgres.implicits.*
 
 import java.time.Instant
 import java.util.UUID
@@ -60,7 +61,23 @@ enum BankAccountEvent:
   case Rejected(reason: String)
 
 object BankAccountEvent:
-  given Meta[BankAccountEvent] = ???
+  private def encode(ev: BankAccountEvent): String = ev match
+    case BankAccountEvent.Opened(at)            => s"Opened|$at"
+    case BankAccountEvent.Deposited(amount, at) => s"Deposited|$amount|$at"
+    case BankAccountEvent.Withdrawn(amount, at) => s"Withdrawn|$amount|$at"
+    case BankAccountEvent.ClosedAccount(at)     => s"ClosedAccount|$at"
+    case BankAccountEvent.Rejected(reason)      => s"Rejected|$reason"
+
+  private def decode(s: String): BankAccountEvent =
+    s.split("\\|").toList match
+      case "Opened" :: at :: Nil              => BankAccountEvent.Opened(Instant.parse(at))
+      case "Deposited" :: amount :: at :: Nil => BankAccountEvent.Deposited(BigDecimal(amount), Instant.parse(at))
+      case "Withdrawn" :: amount :: at :: Nil => BankAccountEvent.Withdrawn(BigDecimal(amount), Instant.parse(at))
+      case "ClosedAccount" :: at :: Nil       => BankAccountEvent.ClosedAccount(Instant.parse(at))
+      case "Rejected" :: rest                 => BankAccountEvent.Rejected(rest.mkString("|"))
+      case _                                  => throw new Exception(s"Cannot decode event: $s")
+
+  given Meta[BankAccountEvent] = Meta[String].imap(decode)(encode)
 
 val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountEvent]] =
   DeciderBuilder
@@ -81,15 +98,38 @@ def transactionsProjection(id: UUID, repo: BankAccountTransactionRepository[Conn
 enum TransactionType:
   case Deposit, Withdrawal
 
+object TransactionType:
+  given Meta[TransactionType] = Meta[String].imap(TransactionType.valueOf)(_.toString)
+
 case class Transaction(transactionType: TransactionType, amount: BigDecimal, at: Instant)
 
+object Transaction:
+  given Read[Transaction] = Read.derived[Transaction]
 
 object DoobieBankAccountTransactionRepository extends BankAccountTransactionRepository[ConnectionIO] {
-  override def create(): ConnectionIO[Int] = ???
+  override def create(): ConnectionIO[Int] =
+    sql"""
+      CREATE TABLE IF NOT EXISTS transactions (
+        aggregate_id     UUID        NOT NULL,
+        transaction_type TEXT        NOT NULL,
+        amount           NUMERIC     NOT NULL,
+        at               TIMESTAMPTZ NOT NULL
+      )
+    """.update.run
 
-  override def insertTransaction(id: UUID, tx: Transaction): ConnectionIO[Int] = ???
+  override def insertTransaction(id: UUID, tx: Transaction): ConnectionIO[Int] =
+    sql"""
+      INSERT INTO transactions (aggregate_id, transaction_type, amount, at)
+      VALUES ($id, ${tx.transactionType}, ${tx.amount}, ${tx.at})
+    """.update.run
 
-  override def listTransactions(id: UUID): ConnectionIO[List[Transaction]] = ???
+  override def listTransactions(id: UUID): ConnectionIO[List[Transaction]] =
+    sql"""
+      SELECT transaction_type, amount, at
+      FROM transactions
+      WHERE aggregate_id = $id
+      ORDER BY at ASC
+    """.query[Transaction].to[List]
 }
 
 trait BankAccountTransactionRepository[F[_]]:

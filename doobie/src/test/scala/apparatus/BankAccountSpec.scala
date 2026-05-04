@@ -38,14 +38,17 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
     )
 
   val createSchema: ConnectionIO[Unit] =
-    sql"""
-      CREATE TABLE IF NOT EXISTS eventstreams (
-        aggregate_id UUID NOT NULL,
-        sequence_nr  INT  NOT NULL,
-        body         TEXT NOT NULL,
-        PRIMARY KEY (aggregate_id, sequence_nr)
-      )
-    """.update.run.map(_ => ())
+    for
+      _ <- sql"""
+             CREATE TABLE IF NOT EXISTS eventstreams (
+               aggregate_id UUID NOT NULL,
+               sequence_nr  INT  NOT NULL,
+               body         TEXT NOT NULL,
+               PRIMARY KEY (aggregate_id, sequence_nr)
+             )
+           """.update.run
+      _ <- DoobieBankAccountTransactionRepository.create()
+    yield ()
 
   // Run one command against a fresh aggregate id, returning the events produced.
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] =
@@ -149,5 +152,25 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
         _ <- runCommand(xa)(id, BankAccountCommand.Close(now))
         events <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(50), now))
       yield assertEquals(events, List(BankAccountEvent.Rejected("invalid command for current state")))
+    }
+  }
+
+  test("projection records deposit and withdrawal transactions") {
+    withContainers { c =>
+      val xa = makeTransactor(c)
+      for
+        _ <- createSchema.transact(xa)
+        id = UUID.randomUUID()
+        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
+        _ <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(500), now))
+        _ <- runCommand(xa)(id, BankAccountCommand.Withdraw(BigDecimal(200), now))
+        txs <- DoobieBankAccountTransactionRepository.listTransactions(id).transact(xa)
+      yield assertEquals(
+        txs,
+        List(
+          Transaction(TransactionType.Deposit,    BigDecimal(500), now),
+          Transaction(TransactionType.Withdrawal, BigDecimal(200), now)
+        )
+      )
     }
   }
