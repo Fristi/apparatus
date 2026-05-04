@@ -1,7 +1,7 @@
 package apparatus.core
 
-import cats.{Applicative, Foldable, Monad, Monoid}
-import cats.arrow.Profunctor
+import cats.{Applicative, Foldable, Functor, Monad, Monoid, ~>}
+import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
 
 /** Composable, persistent finite-state machine GADT running in effect `F`.
@@ -53,6 +53,17 @@ extension [F[_], A, B](left: FSM[F, A, B]) {
   def dimap[C, D](f: C => A)(g: B => D)(using A: Applicative[F]): FSM[F, C, D] =
     left.lmap(f).rmap(g)
 
+  def first[C](using A: Applicative[F]): FSM[F, (A, C), (B, C)] =
+    FSM.Parallel(left, FSM.identity)
+
+  def second[C](using A: Applicative[F]): FSM[F, (C, A), (C, B)] =
+    FSM.Parallel(FSM.identity, left)
+
+  def left[C, D](using A: Applicative[F]): FSM[F, Either[A, C], Either[B, C]] =
+    FSM.Alternative(left, FSM.identity)
+
+  def right[C, D](using A: Applicative[F]): FSM[F, Either[C, A], Either[C, B]] =
+    FSM.Alternative(FSM.identity, left)
 }
 
 object FSM:
@@ -116,6 +127,9 @@ object FSM:
             yield result
       loop(left, right, List(a), monoidNB.empty)
 
+  def identity[F[_] : Applicative, A]: FSM[F, A, A] =
+    FSM.Basic(BaseMachineT.stateless[F, A, A](_.pure))
+
   /** Run a single step, returning output and the updated machine. */
   def run[F[_]: Monad, I, O](fsm: FSM[F, I, O], input: I): F[(O, FSM[F, I, O])] =
     fsm.runWith(input)
@@ -126,8 +140,34 @@ object FSM:
       run(m, i).map((o, nm) => (acc |+| o, nm))
     }
 
+  implicit def category[F[_] : Applicative]: Category[[I, O] =>> FSM[F, I, O]] =
+    new Category[[I, O] =>> FSM[F, I, O]] {
+      override def id[A]: FSM[F, A, A] = identity
+      override def compose[A, B, C](f: FSM[F, B, C], g: FSM[F, A, B]): FSM[F, A, C] =
+        g.andThen(f)
+    }
+
   /** `Profunctor` instance: adapt inputs (`lmap`) and outputs (`rmap`) of any `FSM`. */
   implicit def profunctor[F[_]: Monad]: Profunctor[[I, O] =>> FSM[F, I, O]] =
     new Profunctor[[I, O] =>> FSM[F, I, O]]:
       override def dimap[A, B, C, D](fab: FSM[F, A, B])(f: C => A)(g: B => D): FSM[F, C, D] =
         fab.dimap(f)(g)
+
+  implicit def strong[F[_]: Applicative]: Strong[[I, O] =>> FSM[F, I, O]] =
+    new Strong[[I, O] =>> FSM[F, I, O]] {
+      override def first[A, B, C](fa: FSM[F, A, B]): FSM[F, (A, C), (B, C)] = fa.first
+      override def second[A, B, C](fa: FSM[F, A, B]): FSM[F, (C, A), (C, B)] = fa.second
+      override def dimap[A, B, C, D](fab: FSM[F, A, B])(f: C => A)(g: B => D): FSM[F, C, D] = fab.dimap(f)(g)
+    }
+
+  implicit def choice[F[_] : Applicative]: Choice[[I, O] =>> FSM[F, I, O]] =
+    new Choice[[I, O] =>> FSM[F, I, O]] {
+      override def choice[A, B, C](f: FSM[F, A, C], g: FSM[F, B, C]): FSM[F, Either[A, B], C] =
+        f.or(g).rmap {
+          case Left(l) => l
+          case Right(r) => r
+        }
+
+      override def id[A]: FSM[F, A, A] = identity
+      override def compose[A, B, C](f: FSM[F, B, C], g: FSM[F, A, B]): FSM[F, A, C] = g.andThen(f)
+    }
