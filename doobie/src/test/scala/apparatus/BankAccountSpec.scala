@@ -12,13 +12,14 @@ import munit.CatsEffectSuite
 import org.testcontainers.utility.DockerImageName
 
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
 
   override type Containers = PostgreSQLContainer
   
-  val now = Instant.now()
+  val now = Instant.now().truncatedTo(ChronoUnit.MICROS)
 
   override def startContainers(): PostgreSQLContainer =
     PostgreSQLContainer.Def(
