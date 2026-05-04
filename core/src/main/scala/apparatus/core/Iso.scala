@@ -49,15 +49,19 @@ object Iso:
   // requiring backward match-type inference (NE → Tuple), which Scala 3 cannot do.
   // ---------------------------------------------------------------------------
 
+  /** Typeclass mapping a `Tuple` type to its [[NestedEither]] representation. */
   sealed trait ToNestedEither[T <: Tuple]:
     type Out
 
   object ToNestedEither:
+    /** Helper alias pinning the associated `Out` type. */
     type Aux[T <: Tuple, O] = ToNestedEither[T] { type Out = O }
 
+    /** Base case: a single-element tuple maps directly to its head type. */
     given [H]: Aux[H *: EmptyTuple, H] =
       new ToNestedEither[H *: EmptyTuple] { type Out = H }
 
+    /** Inductive case: prepend `H` as the `Left` branch of the tail's `Either`. */
     given [H, T <: Tuple, TO](using rest: Aux[T, TO]): Aux[H *: T, Either[H, TO]] =
       new ToNestedEither[H *: T] { type Out = Either[H, TO] }
 
@@ -127,7 +131,9 @@ object Iso:
     def value: Int
 
   object TupleSize:
+    /** Base case: empty tuple has size 0. */
     given TupleSize[EmptyTuple] with
       def value = 0
+    /** Inductive case: size of `H *: T` is one more than the size of `T`. */
     given [H, T <: Tuple](using ts: TupleSize[T]): TupleSize[H *: T] with
       def value = 1 + ts.value

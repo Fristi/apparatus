@@ -24,44 +24,61 @@ sealed trait FSM[F[_], I, O]:
   /** Advance the machine by one input, returning output and the updated machine. */
   def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])]
 
+  /** Transform the effect type via a natural transformation. */
+  def mapK[G[_]](f: F ~> G): FSM[G, I, O]
+
 extension [F[_], A, B](left: FSM[F, A, B]) {
 
+  /** Bidirectional mapping via [[Iso]]: adapt input with `isoIn.from`, output with `isoOut.to`. */
   def imap[A2, B2](using isoIn: Iso[A, A2], isoOut: Iso[B, B2], A: Applicative[F]): FSM[F, A2, B2] =
     left.lmap(isoIn.from).rmap(isoOut.to)
 
+  /** Pipe this machine's output into `right`'s input each step. */
   def andThen[C](right: FSM[F, B, C]): FSM[F, A, C] = FSM.Sequential(left, right)
+  /** Alias for [[andThen]]. */
   def >>>[C](right: FSM[F, B, C]): FSM[F, A, C] = andThen(right)
 
+  /** Run this machine and `right` in parallel on the two halves of a pair. */
   def par[C, D](right: FSM[F, C, D]): FSM[F, (A, C), (B, D)] = FSM.Parallel(left, right)
+  /** Alias for [[par]]. */
   def ***[C, D](right: FSM[F, C, D]): FSM[F, (A, C), (B, D)] = par(right)
 
+  /** Route `Either`-typed input: `Left` to this machine, `Right` to `right`. */
   def or[C, D](right: FSM[F, C, D]): FSM[F, Either[A, C], Either[B, D]] = FSM.Alternative(left, right)
+  /** Alias for [[or]]. */
   def |||[C, D](right: FSM[F, C, D]): FSM[F, Either[A, C], Either[B, D]] = or(right)
 
+  /** Contramap the input: transform `C` to `A` before feeding each step. */
   def lmap[C](f: C => A)(using A: Applicative[F]): FSM[F, C, B] =
     left match
       case FSM.Basic(m) => FSM.Basic(m.lmap(f))
       case FSM.Sequential(l, r) => FSM.Sequential(l.lmap(f), r)
       case machine => FSM.Basic(BaseMachineT.stateless[F, C, A](c => f(c).pure[F])) >>> machine
 
+  /** Map the output: transform `B` to `C` after each step. */
   def rmap[C](f: B => C)(using A: Applicative[F]): FSM[F, A, C] =
     left match
       case FSM.Basic(m) => FSM.Basic(m.rmap(f))
       case FSM.Sequential(l, r) => FSM.Sequential(l, r.rmap(f))
       case machine => machine >>> FSM.Basic(BaseMachineT.stateless[F, B, C](b => f(b).pure[F]))
 
+  /** Adapt both input and output in a single pass. */
   def dimap[C, D](f: C => A)(g: B => D)(using A: Applicative[F]): FSM[F, C, D] =
     left.lmap(f).rmap(g)
 
+  /** Pass a paired input through: run this machine on `_1`, forward `_2` unchanged. */
   def first[C](using A: Applicative[F]): FSM[F, (A, C), (B, C)] =
     FSM.Parallel(left, FSM.identity)
 
+  /** Pass a paired input through: forward `_1` unchanged, run this machine on `_2`. */
   def second[C](using A: Applicative[F]): FSM[F, (C, A), (C, B)] =
     FSM.Parallel(FSM.identity, left)
 
+  /** Route `Left` to this machine; forward `Right` unchanged. */
   def left[C, D](using A: Applicative[F]): FSM[F, Either[A, C], Either[B, C]] =
     FSM.Alternative(left, FSM.identity)
 
+  /** Route `Right` to this machine; forward `Left` unchanged. */
   def right[C, D](using A: Applicative[F]): FSM[F, Either[C, A], Either[C, B]] =
     FSM.Alternative(FSM.identity, left)
 }
@@ -71,6 +88,7 @@ object FSM:
   case class Basic[F[_], I, O](machine: BaseMachineT[F, I, O]) extends FSM[F, I, O]:
     def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])] =
       machine.step(input).map((o, s) => (o, Basic(BaseMachineT(s, (s, i) => machine.action(s, i)))))
+    def mapK[G[_]](f: F ~> G): FSM[G, I, O] = Basic(machine.mapK(f))
 
   /** Pipes `left`'s output directly into `right`'s input each step. */
   case class Sequential[F[_], A, B, C](left: FSM[F, A, B], right: FSM[F, B, C]) extends FSM[F, A, C]:
@@ -79,6 +97,7 @@ object FSM:
         (o1, l2) <- run(left, input)
         (o2, r2) <- run(right, o1)
       yield (o2, Sequential(l2, r2))
+    def mapK[G[_]](f: F ~> G): FSM[G, A, C] = Sequential(left.mapK(f), right.mapK(f))
 
   /** Runs `left` and `right` independently on the two halves of a pair. */
   case class Parallel[F[_], A, B, C, D](left: FSM[F, A, B], right: FSM[F, C, D]) extends FSM[F, (A, C), (B, D)]:
@@ -87,6 +106,7 @@ object FSM:
         (o1, l2) <- run(left, input._1)
         (o2, r2) <- run(right, input._2)
       yield ((o1, o2), Parallel(l2, r2))
+    def mapK[G[_]](f: F ~> G): FSM[G, (A, C), (B, D)] = Parallel(left.mapK(f), right.mapK(f))
 
   /** Routes `Left` inputs to `left` and `Right` inputs to `right`; the unmatched
     * machine keeps its state untouched.
@@ -96,6 +116,7 @@ object FSM:
       input match
         case Left(l)  => run(left, l).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
         case Right(r) => run(right, r).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
+    def mapK[G[_]](f: F ~> G): FSM[G, Either[A, C], Either[B, D]] = Alternative(left.mapK(f), right.mapK(f))
 
   /** Closed feedback loop between two machines.
     *
@@ -126,7 +147,9 @@ object FSM:
               result    <- loop(lf2, rf2, foldN.toList(na) ++ tail, monoidNB.combine(acc, nb))
             yield result
       loop(left, right, List(a), monoidNB.empty)
+    def mapK[G[_]](f: F ~> G): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
 
+  /** Stateless identity machine: passes every input through unchanged. */
   def identity[F[_] : Applicative, A]: FSM[F, A, A] =
     FSM.Basic(BaseMachineT.stateless[F, A, A](_.pure))
 
@@ -140,6 +163,7 @@ object FSM:
       run(m, i).map((o, nm) => (acc |+| o, nm))
     }
 
+  /** `Category` instance: `id` is [[identity]], `compose` is [[andThen]] (reversed). */
   implicit def category[F[_] : Applicative]: Category[[I, O] =>> FSM[F, I, O]] =
     new Category[[I, O] =>> FSM[F, I, O]] {
       override def id[A]: FSM[F, A, A] = identity
@@ -153,6 +177,7 @@ object FSM:
       override def dimap[A, B, C, D](fab: FSM[F, A, B])(f: C => A)(g: B => D): FSM[F, C, D] =
         fab.dimap(f)(g)
 
+  /** `Strong` instance: [[first]] and [[second]] thread one half of a pair through unchanged. */
   implicit def strong[F[_]: Applicative]: Strong[[I, O] =>> FSM[F, I, O]] =
     new Strong[[I, O] =>> FSM[F, I, O]] {
       override def first[A, B, C](fa: FSM[F, A, B]): FSM[F, (A, C), (B, C)] = fa.first
@@ -160,6 +185,7 @@ object FSM:
       override def dimap[A, B, C, D](fab: FSM[F, A, B])(f: C => A)(g: B => D): FSM[F, C, D] = fab.dimap(f)(g)
     }
 
+  /** `Choice` instance: merge two `Either`-routed machines into one that collapses output to `C`. */
   implicit def choice[F[_] : Applicative]: Choice[[I, O] =>> FSM[F, I, O]] =
     new Choice[[I, O] =>> FSM[F, I, O]] {
       override def choice[A, B, C](f: FSM[F, A, C], g: FSM[F, B, C]): FSM[F, Either[A, B], C] =

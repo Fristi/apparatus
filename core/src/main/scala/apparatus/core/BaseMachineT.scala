@@ -36,10 +36,13 @@ trait BaseMachineT[F[_], I, O] {
         f(self.action(state, input))
     }
 
+  /** Contramap the input: adapt `H` to `I` before each step. */
   final def lmap[H](f: H => I)(using F: Functor[F]): BaseMachineT[F, H, O] = dimap[H, O](f)(identity)
 
+  /** Map the output: transform `O` to `P` after each step. */
   final def rmap[P](f: O => P)(using F: Functor[F]): BaseMachineT[F, I, P] = dimap[I, P](identity)(f)
 
+  /** Adapt both input and output in a single pass. */
   final def dimap[H, P](f: H => I)(g: O => P)(using F: Functor[F]): BaseMachineT[F, H, P] =
     new BaseMachineT[F, H, P] {
       override type State = self.State
