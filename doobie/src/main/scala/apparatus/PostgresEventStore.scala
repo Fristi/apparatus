@@ -9,7 +9,7 @@ import java.util.UUID
 case class PostgresEventStore[O : {Read, Write}]() extends EventStore[ConnectionIO, O] {
 
   override def lockAggregate(id: UUID): ConnectionIO[Boolean] =
-    sql"SELECT pg_try_advisory_lock(hashtext($id))"
+    sql"SELECT pg_try_advisory_lock(hashtext(CAST($id AS text)))"
       .query[Boolean]
       .unique
 

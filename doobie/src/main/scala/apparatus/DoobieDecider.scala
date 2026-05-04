@@ -24,13 +24,13 @@ extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
       events <- store.loadAggregateStream(id)
       evolvedDecider = decider.evolveFrom(events.map(_.body))
     } yield {
-      val maxSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr).getOrElse(0)
+      val nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
       val baseMachineT = new BaseMachineT[ConnectionIO, I, List[O]] {
         override type State = S
         override def initialState: S = evolvedDecider.state
         override def action(state: State, input: I): ConnectionIO[(List[O], State)] =
           val o = evolvedDecider.decide(input, state)
-          val eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(maxSequenceNr + idx, o))
+          val eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
           val ns = evolvedDecider.evolve(o, state)
 
           store.appendAggregateStream(id, eventStreamToAppend).map(_ => (o, ns))
