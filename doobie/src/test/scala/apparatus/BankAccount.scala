@@ -8,22 +8,22 @@ enum BankAccountState:
   case Active(balance: BigDecimal)
   case Closed
 
-  def evolve(events: List[BankAccountEvent]): BankAccountState =
-    events.foldLeft(this)((acc: BankAccountState, ev: BankAccountEvent) => acc match {
+  def evolve(ev: BankAccountEvent): BankAccountState =
+    this match {
       case BankAccountState.Uninitialized =>
         ev match {
           case BankAccountEvent.Opened => BankAccountState.Active(0)
-          case _ => acc
+          case _ => this
         }
       case BankAccountState.Active(balance) =>
         ev match {
           case BankAccountEvent.Deposited(amount) => BankAccountState.Active(balance + amount)
           case BankAccountEvent.Withdrawn(amount) => BankAccountState.Active(balance - amount)
           case BankAccountEvent.ClosedAccount => BankAccountState.Closed
-          case _ => acc
+          case _ => this
         }
-      case BankAccountState.Closed => acc
-    })
+      case BankAccountState.Closed => this
+    }
 
   def decide(cmd: BankAccountCommand): List[BankAccountEvent] = this match {
     case BankAccountState.Uninitialized => cmd match {
@@ -70,8 +70,7 @@ object BankAccountEvent:
   }
 
 val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountEvent]] =
-  Decider(
-    state = BankAccountState.Uninitialized,
-    decide = (cmd, state) => state.decide(cmd),
-    evolve = (events, state) => state.evolve(events)
-  )
+  DeciderBuilder
+    .seed[BankAccountState](BankAccountState.Uninitialized)
+    .decide[BankAccountCommand, List[BankAccountEvent]](_.decide(_))
+    .evolveList(_.evolve(_))

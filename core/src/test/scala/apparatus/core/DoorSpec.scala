@@ -10,6 +10,25 @@ enum DoorState:
   case Closed(knocked: Int)
   case Open
 
+  def decide(cmd: DoorCommand): List[DoorEvent] = this match {
+    case DoorState.Closed(knocked) => cmd match
+      case DoorCommand.Knock  => List(if knocked + 1 == 3 then DoorEvent.Opened else DoorEvent.Knocked)
+      case DoorCommand.Close  => Nil
+    case DoorState.Open => cmd match
+      case DoorCommand.Knock  => Nil
+      case DoorCommand.Close  => List(DoorEvent.Closed)
+  }
+
+  def evolve(event: DoorEvent): DoorState = this match {
+    case DoorState.Closed(knocked) => event match
+      case DoorEvent.Opened => DoorState.Open
+      case DoorEvent.Knocked => DoorState.Closed(knocked + 1)
+      case _                => this
+    case DoorState.Open => event match
+      case DoorEvent.Closed => DoorState.Closed(0)
+      case _                => this
+  }
+
 enum DoorCommand:
   case Knock
   case Close
@@ -32,26 +51,10 @@ object DoorStats:
 // --- Fixtures ---
 
 val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
-  Decider[DoorState, DoorCommand, List[DoorEvent]](
-    DoorState.Closed(0),
-    (c, s) => s match
-      case DoorState.Closed(knocked) => c match
-        case DoorCommand.Knock  => List(if knocked + 1 == 3 then DoorEvent.Opened else DoorEvent.Knocked)
-        case DoorCommand.Close  => Nil
-      case DoorState.Open => c match
-        case DoorCommand.Knock  => Nil
-        case DoorCommand.Close  => List(DoorEvent.Closed)
-    ,
-    (evs, s) => evs.foldLeft(s)((state, ev) => state match
-      case DoorState.Closed(knocked) => ev match
-        case DoorEvent.Opened => DoorState.Open
-        case DoorEvent.Knocked => DoorState.Closed(knocked + 1)
-        case _                => state
-      case DoorState.Open => ev match
-        case DoorEvent.Closed => DoorState.Closed(0)
-        case _                => state
-    )
-  )
+  DeciderBuilder
+    .seed[DoorState](DoorState.Closed(0))
+    .decide[DoorCommand, List[DoorEvent]](_.decide(_))
+    .evolveList(_.evolve(_))
 
 val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   BaseMachineT.apply[Id, DoorStats, List[DoorEvent], DoorStats](

@@ -1,6 +1,6 @@
 package apparatus.core
 
-import cats.Applicative
+import cats.{Applicative, MonadError}
 import cats.implicits.*
 
 /** Pure, effect-free state machine following the Decider pattern.
@@ -21,12 +21,7 @@ import cats.implicits.*
  * @param decide pure function `(input, state) => output`
  * @param evolve pure function `(output, state) => newState`
  */
-case class Decider[S, I, O](
-                             state: S,
-                             decide: (I, S) => O,
-                             evolve: (O, S) => S
-                           ) {
-  self =>
+case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) => S) { self =>
 
   /** Lift into [[BaseMachineT]] under effect `F`, running `decide` then `evolve` per step. */
   def toBaseMachine[F[_] : Applicative]: BaseMachineT[F, I, O] =
@@ -41,6 +36,47 @@ case class Decider[S, I, O](
         (o, ns).pure
 }
 
+final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
+  def withError[E](invalidCommand: E): FallibleDeciderBuilder[S, E] =
+    new FallibleDeciderBuilder(initialState, invalidCommand)
+  
+  def decide[I, O](decide: (S, I) => O): WithDecideDeciderBuilder[S, I, O] =
+    new WithDecideDeciderBuilder(initialState, decide)
+
+  def partiallyDecide[I, O](decide: PartialFunction[(S, I), List[O]]): WithDecideDeciderBuilder[S, I, List[O]] =
+    new WithDecideDeciderBuilder(initialState, (s, i) => decide.applyOrElse((s, i), _ => Nil))
+}
+
+final class FallibleDeciderBuilder[S, E] private[core] (initialState: S, invalidCommand: E) {
+  def partiallyDecide[I, O](decide: PartialFunction[(I, S), Either[E, O]]): WithDecideDeciderBuilder[S, I, Either[E, O]] =
+    new WithDecideDeciderBuilder(initialState, (i, s) => decide.applyOrElse((s, i), _ => Left(invalidCommand)))
+}
+
+final class WithDecideDeciderBuilder[S, I, O] private [core] (val initialState: S, val decide: (S, I) => O)
+
+extension [S, I, O](builder: WithDecideDeciderBuilder[S, I, O]) {
+  def evolveSingle(f: (S, O) => S): Decider[S, I, O] =
+    Decider(builder.initialState, (i, s) => builder.decide(s, i), (o, s) => f(s, o))
+}
+
+extension [S, I, O](builder: WithDecideDeciderBuilder[S, I, List[O]]) {
+  def evolveList(f: (S, O) => S): Decider[S, I, List[O]] =
+    Decider(builder.initialState, (i, s) => builder.decide(s, i), (o, s) => o.foldLeft(s)(f))
+}
+
+extension [S, E, I, O](builder: WithDecideDeciderBuilder[S, I, Either[E, List[O]]]) {
+  def evolveErrorList(f: (S, O) => S): Decider[S, I, Either[E, List[O]]] =
+    Decider(builder.initialState, (i, s) => builder.decide(s, i), (o, s) => o match {
+      case Left(value) => s
+      case Right(value) => value.foldLeft(s)(f)
+    })
+}
+
+object DeciderBuilder {
+  def seed[S](initialState: S): SeedDeciderBuilder[S] =
+    new SeedDeciderBuilder(initialState)
+}
+
 extension [S, I, O](decider: Decider[S, I, List[O]]) {
   /** Replay `stream` through `evolve` to advance the decider's initial state. */
   def evolveFrom(stream: List[O]): Decider[S, I, List[O]] =
@@ -49,4 +85,20 @@ extension [S, I, O](decider: Decider[S, I, List[O]]) {
       decide = (i, s) => decider.decide(i, s),
       evolve = (o, s) => decider.evolve(o, s)
     )
+}
+
+extension [S, E, I, O](decider: Decider[S, I, Either[E, List[O]]]) {
+  def absorbEitherToBaseMachine[F[_], EE](using M: MonadError[F, EE], ev: E =:= EE): BaseMachineT[F, I, List[O]] =
+    absorbEitherToBaseMachine_(ev)
+
+  def absorbEitherToBaseMachine_[F[_], EE](liftError: E => EE)(using M: MonadError[F, EE]): BaseMachineT[F, I, List[O]] =
+    new BaseMachineT[F, I, List[O]] {
+      override type State = S
+      override def initialState: S = decider.state
+      override def action(state: State, input: I): F[(List[O], State)] =
+        for {
+          o <- M.fromEither(decider.decide(input, state).left.map(liftError))
+          ns = decider.evolve(Right(o), state)
+        } yield (o, ns)
+    }
 }

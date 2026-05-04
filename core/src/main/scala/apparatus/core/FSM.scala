@@ -83,6 +83,14 @@ extension [F[_], A, B](left: FSM[F, A, B]) {
     FSM.Alternative(FSM.identity, left)
 }
 
+extension [F[_], M[_], A, B](left: FSM[F, A, M[B]]) {
+  def feedback(right: FSM[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): FSM[F, A, M[B]] =
+    FSM.Feedback(left, right)
+
+  def <->(right: FSM[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): FSM[F, A, M[B]] =
+    feedback(right)
+}
+
 object FSM:
   /** Wraps a single [[BaseMachineT]], threading its internal state across steps. */
   case class Basic[F[_], I, O](machine: BaseMachineT[F, I, O]) extends FSM[F, I, O]:
@@ -157,11 +165,17 @@ object FSM:
   def run[F[_]: Monad, I, O](fsm: FSM[F, I, O], input: I): F[(O, FSM[F, I, O])] =
     fsm.runWith(input)
 
+  def runA[F[_] : Monad, I, O](fsm: FSM[F, I, O], input: I): F[O] =
+    run(fsm, input).map((x, _) => x)
+
   /** Fold over a collection of inputs, combining outputs via `Monoid[O]`. */
   def runMultiple[F[_]: Monad, M[_]: Foldable, I, O: Monoid](fsm: FSM[F, I, O], entries: M[I]): F[(O, FSM[F, I, O])] =
     entries.foldM((Monoid[O].empty, fsm)) { case ((acc, m), i) =>
       run(m, i).map((o, nm) => (acc |+| o, nm))
     }
+
+  def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](fsm: FSM[F, I, O], entries: M[I]): F[O] =
+    runMultiple(fsm, entries).map((x, _) => x)
 
   /** `Category` instance: `id` is [[identity]], `compose` is [[andThen]] (reversed). */
   implicit def category[F[_] : Applicative]: Category[[I, O] =>> FSM[F, I, O]] =

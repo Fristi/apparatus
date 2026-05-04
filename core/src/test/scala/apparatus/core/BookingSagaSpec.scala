@@ -1,7 +1,6 @@
 package apparatus.core
 
 import cats.Id
-import cats.arrow.Profunctor
 import cats.data.NonEmptyList
 import cats.implicits.*
 
@@ -145,31 +144,31 @@ class BookingSagaSpec extends munit.FunSuite:
             car: FSM[Id, SvcCmd, List[SvcEvt]] = serviceDecider(),
             hotel: FSM[Id, SvcCmd, List[SvcEvt]] = serviceDecider()
           ): FSM[Id, BookingInput, List[BookingOutput]] =
-    FSM.Feedback(orchestrator, makeServices(flight, car, hotel))
+    orchestrator <-> makeServices(flight, car, hotel)
 
   test("happy path: full reservation command trail"):
-    val (cmds, _) = FSM.run(saga(), BookingInput.Start)
+    val cmds = FSM.runA(saga(), BookingInput.Start)
     assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Hotel, SvcCmd.Reserve)))
 
   test("hotel fails: car and flight compensated in reverse"):
-    val (cmds, _) = FSM.run(saga(hotel = serviceDecider(failsOnReserve = true)), BookingInput.Start)
+    val cmds = FSM.runA(saga(hotel = serviceDecider(failsOnReserve = true)), BookingInput.Start)
     assertEquals(cmds, List(
       BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Hotel, SvcCmd.Reserve),
       BookingOutput(EntityType.Car, SvcCmd.Compensate), BookingOutput(EntityType.Flight, SvcCmd.Compensate)
     ))
 
   test("car fails: only flight compensated"):
-    val (cmds, _) = FSM.run(saga(car = serviceDecider(failsOnReserve = true)), BookingInput.Start)
+    val cmds = FSM.runA(saga(car = serviceDecider(failsOnReserve = true)), BookingInput.Start)
     assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve), BookingOutput(EntityType.Car, SvcCmd.Reserve), BookingOutput(EntityType.Flight, SvcCmd.Compensate)))
 
   test("flight fails: nothing to compensate"):
-    val (cmds, _) = FSM.run(saga(flight = serviceDecider(failsOnReserve = true)), BookingInput.Start)
+    val cmds = FSM.runA(saga(flight = serviceDecider(failsOnReserve = true)), BookingInput.Start)
     assertEquals(cmds, List(BookingOutput(EntityType.Flight, SvcCmd.Reserve)))
 
   test("service state is respected: Compensate on Idle emits nothing"):
     // hotel fails → ToCar(Compensate) issued, but car is already Idle if it also failed
     // (edge case: car fails AND hotel fails — only flight needs compensating)
-    val (cmds, _) = FSM.run(
+    val cmds = FSM.runA(
       saga(
         car = serviceDecider(failsOnReserve = true),
         hotel = serviceDecider(failsOnReserve = true)

@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Apparatus"
-  text: "Scala toolkit for tagless final algebras"
-  tagline: FSM-driven schema derivation and database bindings for Scala 3
+  text: "Composable FSM forests"
+  tagline: General purpose FSM forests via (non) persistent FSM 
   actions:
     - theme: brand
       text: Get Started
@@ -14,10 +14,12 @@ hero:
       link: https://github.com/Fristi/apparatus
 
 features:
-  - title: FSM-driven Schema
-    details: Define your domain state machines and derive schemas automatically using Mirror-based derivation.
-  - title: Tagless Final
-    details: Works with any algebra defined in tagless final style.
+  - title: General purpose
+    details: Can be used for (non) persistent FSM in stream processing or concurrent programming
+  - title: Event sourcing
+    details: Define aggregates with `Decider` and project the output read-models with ease
+  - title: Sagas
+    details: Easily create composable saga networks
   - title: Doobie Integration
-    details: First-class Doobie support for reading and writing your domain types to PostgreSQL.
+    details: Doobie support for persistent `Decider` via `ConnectionIO`, can be composed with projections to achieve *strongly consistent* read-models
 ---
