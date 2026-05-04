@@ -12,5 +12,17 @@ lazy val core = (project in file("core"))
     )
   )
 
+lazy val doobie = (project in file("doobie"))
+  .settings(
+    name := "apparatus-doobie",
+    libraryDependencies ++= Seq(
+      "org.tpolecat" %% "doobie-postgres"                    % "1.0.0-RC12",
+      "com.dimafeng" %% "testcontainers-scala-postgresql"    % "0.44.1"     % Test,
+      "com.dimafeng" %% "testcontainers-scala-munit"         % "0.44.1"     % Test,
+      "org.typelevel" %% "munit-cats-effect"                 % "2.0.0"      % Test
+    )
+  )
+  .dependsOn(core)
+
 lazy val root = (project in file("."))
-  .aggregate(core)
+  .aggregate(core, doobie)
