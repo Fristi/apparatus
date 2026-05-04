@@ -42,6 +42,7 @@ case class Decider[S, I, O](
 }
 
 extension [S, I, O](decider: Decider[S, I, List[O]]) {
+  /** Replay `stream` through `evolve` to advance the decider's initial state. */
   def evolveFrom(stream: List[O]): Decider[S, I, List[O]] =
     Decider(
       state = decider.evolve(stream, decider.state),

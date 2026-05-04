@@ -7,15 +7,27 @@ import doobie.free.connection.ConnectionIO
 
 import java.util.UUID
 
+/** An event envelope pairing a monotonically increasing `sequenceNr` with its `body`. */
 final case class EventEntry[O](sequenceNr: Int, body: O)
 
+/** Persistence interface for an append-only aggregate event stream. */
 trait EventStore[F[_], O]:
+  /** Acquire an advisory lock for `id`; returns `false` if already held. */
   def lockAggregate(id: UUID): F[Boolean]
+  /** Load all stored events for `id` in sequence-number order. */
   def loadAggregateStream(id: UUID): F[List[EventEntry[O]]]
+  /** Append `events` to the stream for `id`; returns the row count inserted. */
   def appendAggregateStream(id: UUID, events: List[EventEntry[O]]): F[Int]
 
 
 extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
+  /** Build a transactional [[FSM]] for aggregate `id`.
+    *
+    * Within a single `ConnectionIO` transaction this will:
+    *   1. Acquire an advisory lock on `id` (raises on failure).
+    *   2. Load and replay the existing event stream to restore state.
+    *   3. Return a [[FSM.Basic]] whose `action` decides, appends, and evolves atomically.
+    */
   def transactionalDecider(id: UUID): ConnectionIO[FSM[ConnectionIO, I, List[O]]] =
     for {
       store = PostgresEventStore[O]()
