@@ -1,7 +1,7 @@
 package apparatus.core
 
 import cats.arrow.Profunctor
-import cats.{Functor, Applicative}
+import cats.{Applicative, Functor, ~>}
 import cats.implicits.*
 
 /** Core abstraction for a stateful machine running in effect `F`.
@@ -26,13 +26,21 @@ trait BaseMachineT[F[_], I, O] {
   def action(state: State, input: I): F[(O, State)]
 
   /** Convenience: run one step from `initialState`. */
-  def step(input: I): F[(O, State)] = action(initialState, input)
+  final def step(input: I): F[(O, State)] = action(initialState, input)
 
-  def lmap[H](f: H => I)(using F: Functor[F]): BaseMachineT[F, H, O] = dimap[H, O](f)(identity)
+  final def mapK[G[_]](f: F ~> G): BaseMachineT[G, I, O] =
+    new BaseMachineT[G, I, O] {
+      override type State = self.State
+      override def initialState: State = self.initialState
+      override def action(state: State, input: I): G[(O, State)] =
+        f(self.action(state, input))
+    }
 
-  def rmap[P](f: O => P)(using F: Functor[F]): BaseMachineT[F, I, P] = dimap[I, P](identity)(f)
+  final def lmap[H](f: H => I)(using F: Functor[F]): BaseMachineT[F, H, O] = dimap[H, O](f)(identity)
 
-  def dimap[H, P](f: H => I)(g: O => P)(using F: Functor[F]): BaseMachineT[F, H, P] =
+  final def rmap[P](f: O => P)(using F: Functor[F]): BaseMachineT[F, I, P] = dimap[I, P](identity)(f)
+
+  final def dimap[H, P](f: H => I)(g: O => P)(using F: Functor[F]): BaseMachineT[F, H, P] =
     new BaseMachineT[F, H, P] {
       override type State = self.State
       override def initialState: State = self.initialState
