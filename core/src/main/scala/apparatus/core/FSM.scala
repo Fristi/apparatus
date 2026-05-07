@@ -190,14 +190,6 @@ object FSM:
       loop(left, right, List(a), monoidNB.empty)
     def mapK[G[_]](f: F ~> G): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
 
-    /** Reroot: expose `right` as the external driver.
-      *
-      * The result accepts `N[B]` (a collection of inputs for `right`) and returns `N[A]`.
-      * `left` becomes the reactor, feeding back into `right` as usual.
-      * Use [[FeedbackMany]] directly when you need to start with a pre-built list.
-      */
-    def reroot: FSM[F, N[B], N[A]] = FeedbackMany(right, left)
-
   /** Like [[Feedback]] but accepts `N[A]` (a collection) as the initial input instead of
     * a single `A`. All elements are processed through the same feedback loop in order.
     *
@@ -233,14 +225,6 @@ object FSM:
         case Some(a) => inner.runWith(a).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
         case None    => (mb.empty, this).pure[F]
     def mapK[G[_]](f: F ~> G): FSM[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
-
-    /** Reroot: strip the partial-function filter and expose `inner` directly.
-      *
-      * The caller now drives `inner` with its native input type `A`, bypassing
-      * the `C`-typed routing entirely. Any downstream `rmap` or `>>>` nodes
-      * attached to this machine are preserved through `inner`.
-      */
-    def reroot: FSM[F, A, B] = inner
 
   /** Runs both machines on the same input; outputs are combined via [[Monoid]].
     * Both machines advance state independently on every step.
