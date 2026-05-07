@@ -9,7 +9,6 @@ export default defineConfig({
       { text: 'Guide', link: '/getting-started' },
       { text: 'GitHub', link: 'https://github.com/Fristi/apparatus' },
     ],
-    logo: '/logo.jpg',
     sidebar: [
       {
         text: 'Introduction',
