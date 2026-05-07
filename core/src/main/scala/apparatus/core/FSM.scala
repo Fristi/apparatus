@@ -22,19 +22,6 @@ import cats.implicits.*
   */
 sealed trait FSM[F[_], I, O] { outer =>
 
-  final def lmapPartial[H](f: PartialFunction[H, I])(implicit M: MonoidK[F]): FSM[F, H, O] =
-    lmapOption(i => f.lift(i))
-
-  final def lmapOption[H](g: H => Option[I])(implicit M: MonoidK[F]): FSM[F, H, O] = new FSM[F, H, O] {
-    override def runWith(input: H)(using Monad[F]): F[(O, FSM[F, H, O])] = g(input) match {
-      case Some(value) =>
-        outer.runWith(value).map((o, fsm) => (o, fsm.lmapOption(g)))
-      case None => M.empty
-    }
-
-    override def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, H, O] = outer.mapK(f).lmapOption(g)
-  }
-
   /** Advance the machine by one input, returning output and the updated machine. */
   def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])]
 
@@ -107,6 +94,20 @@ extension [F[_], A, B](left: FSM[F, A, B]) {
   /** Route `Right` to this machine; forward `Left` unchanged. */
   def right[C, D](using A: Applicative[F]): FSM[F, Either[C, A], Either[C, B]] =
     FSM.Alternative(FSM.identity, left)
+
+  /** Map input via a partial function; returns [[Monoid.empty]] for the output (without
+   * advancing state) when the function is undefined for the given input.
+   * Unlike [[lmapPartial]] (which requires [[MonoidK]] on the effect), this variant
+   * requires only [[Monoid]] on the output type and works with the `Id` effect.
+   */
+  def lmapOrEmpty[C](pf: PartialFunction[C, A])(using m: Monoid[B]): FSM[F, C, B] =
+    FSM.LmapOrEmpty(left, pf, m)
+
+  /** Run both machines on the same input and combine their outputs via [[Monoid]].
+   * Both machines advance their state independently on every step.
+   */
+  def merge(right: FSM[F, A, B])(using m: Monoid[B]): FSM[F, A, B] =
+    FSM.Merged(left, right, m)
 }
 
 extension [F[_], M[_], A, B](left: FSM[F, A, M[B]]) {
@@ -183,6 +184,27 @@ object FSM:
       loop(left, right, List(a), monoidNB.empty)
     def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
 
+  /** Routes input via a partial function; returns [[Monoid.empty]] without advancing state
+    * when the function is undefined for the given input.
+    */
+  case class LmapOrEmpty[F[_], A, B, C](inner: FSM[F, A, B], pf: PartialFunction[C, A], mb: Monoid[B]) extends FSM[F, C, B]:
+    def runWith(input: C)(using Monad[F]): F[(B, FSM[F, C, B])] =
+      pf.lift(input) match
+        case Some(a) => inner.runWith(a).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
+        case None    => (mb.empty, this).pure[F]
+    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
+
+  /** Runs both machines on the same input; outputs are combined via [[Monoid]].
+    * Both machines advance state independently on every step.
+    */
+  case class Merged[F[_], A, B](left: FSM[F, A, B], right: FSM[F, A, B], mb: Monoid[B]) extends FSM[F, A, B]:
+    def runWith(input: A)(using Monad[F]): F[(B, FSM[F, A, B])] =
+      for
+        (b1, l2) <- run(left, input)
+        (b2, r2) <- run(right, input)
+      yield (mb.combine(b1, b2), Merged(l2, r2, mb))
+    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, A, B] = Merged(left.mapK(f), right.mapK(f), mb)
+
   /** Stateless identity machine: passes every input through unchanged. */
   def identity[F[_] : Applicative, A]: FSM[F, A, A] =
     FSM.Basic(BaseMachineT.stateless[F, A, A](_.pure))
@@ -237,29 +259,3 @@ object FSM:
       override def id[A]: FSM[F, A, A] = identity
       override def compose[A, B, C](f: FSM[F, B, C], g: FSM[F, A, B]): FSM[F, A, C] = g.andThen(f)
     }
-
-  implicit def semigroupK[F[_] : SemigroupK, I]: SemigroupK[[O] =>> FSM[F, I, O]] =
-    new SemigroupK[[O] =>> FSM[F, I, O]] {
-      override def combineK[A](x: FSM[F, I, A], y: FSM[F, I, A]): FSM[F, I, A] =
-        new FSM[F, I, A] {
-          /** Advance the machine by one input, returning output and the updated machine. */
-          override def runWith(input: I)(using Monad[F]): F[(A, FSM[F, I, A])] = {
-            def left = x.runWith(input).map {
-              case (o, ns) =>
-                println(s"left: $o")
-                (o, ns)
-            }
-            def right = y.runWith(input).map {
-              case (o, ns) =>
-                println(s"right: $o")
-                (o, ns)
-            }
-
-            left combineK right
-          }
-
-          /** Transform the effect type via a natural transformation. */
-          override def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, I, A] = x.mapK(f)
-        }
-    }
-
