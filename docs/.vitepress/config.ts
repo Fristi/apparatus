@@ -23,6 +23,7 @@ export default defineConfig({
           { text: 'Basic state machines', link: '/core/base-machine' },
           { text: 'Eventful state machines', link: '/core/decider' },
           { text: 'Network of state machines', link: '/core/fsm' },
+          { text: 'Creating a Saga', link: '/core/saga' },
           { text: 'Isomorphic mapping', link: '/core/iso' },
         ],
       }

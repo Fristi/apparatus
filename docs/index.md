@@ -4,11 +4,17 @@ layout: home
 hero:
   name: "Apparatus"
   text: "Composable FSM forests"
-  tagline: General purpose FSM forests via (non) persistent FSM 
+  tagline: General purpose FSM forests via (non) persistent FSM
+  image:
+    src: "/logo.jpg"
+    alt: Apparatus
   actions:
     - theme: brand
       text: Get Started
-      link: /getting-started
+      link: /core/getting-started
+    - theme: alt
+      text: Introduction
+      link: /introduction
     - theme: alt
       text: GitHub
       link: https://github.com/Fristi/apparatus
