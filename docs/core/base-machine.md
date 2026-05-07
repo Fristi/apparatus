@@ -30,7 +30,7 @@ val counter: BaseMachineT[Id, Int, Int] =
     seed  = 0,
     f     = (state, delta) => (state + delta, state + delta)
   )
-// counter: BaseMachineT[Id, Int, Int] = apparatus.core.BaseMachineT$$anon$3@55fdf324
+// counter: BaseMachineT[Id, Int, Int] = apparatus.core.BaseMachineT$$anon$3@6bd3889e
 
 // run three steps manually
 val (out1, s1) = counter.action(counter.initialState, 10)
@@ -49,7 +49,7 @@ For machines with no meaningful state use `BaseMachineT.stateless`:
 // Pure function: parse a String to Double
 val parser: BaseMachineT[Id, String, Double] =
   BaseMachineT.stateless[Id, String, Double](s => s.toDouble)
-// parser: BaseMachineT[Id, String, Double] = apparatus.core.BaseMachineT$$anon$3@7643d14f
+// parser: BaseMachineT[Id, String, Double] = apparatus.core.BaseMachineT$$anon$3@235c9b98
 ```
 
 ## Input / output adapters
@@ -60,12 +60,12 @@ val parser: BaseMachineT[Id, String, Double] =
 // Adapt input: accept a (String, Int) pair, ignore the Int
 val fromPair: BaseMachineT[Id, (String, Double), Double] =
   parser.lmap[(String, Double)](_._1)
-// fromPair: BaseMachineT[Id, Tuple2[String, Double], Double] = apparatus.core.BaseMachineT$$anon$2@58a02c72
+// fromPair: BaseMachineT[Id, Tuple2[String, Double], Double] = apparatus.core.BaseMachineT$$anon$2@52b29299
 
 // Adapt output: convert the parsed Double to a String label
 val labelled: BaseMachineT[Id, String, String] =
   parser.rmap(d => s"parsed: $d")
-// labelled: BaseMachineT[Id, String, String] = apparatus.core.BaseMachineT$$anon$2@48716fab
+// labelled: BaseMachineT[Id, String, String] = apparatus.core.BaseMachineT$$anon$2@26506ce8
 ```
 
 ## Effect polymorphism

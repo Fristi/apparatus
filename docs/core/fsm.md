@@ -30,14 +30,14 @@ val door: Decider[DoorState, DoorCmd, List[DoorEvt]] =
       case (s, _)                              => s
 // door: Decider[DoorState, DoorCmd, List[DoorEvt]] = Decider(
 //   state = Closed,
-//   decide = apparatus.core.Decider$package$$$Lambda$15308/0x000000e003402d60@5c8ead84,
-//   evolve = apparatus.core.Decider$package$$$Lambda$15309/0x000000e003403310@5d0419ae
+//   decide = apparatus.core.Decider$package$$$Lambda$12449/0x000000e002d59100@1aeb9074,
+//   evolve = apparatus.core.Decider$package$$$Lambda$12450/0x000000e002d596b0@df5ea73
 // )
 
 val doorFsm: FSM[Id, DoorCmd, List[DoorEvt]] =
   FSM.Basic(door.toBaseMachine[Id])
 // doorFsm: FSM[Id, DoorCmd, List[DoorEvt]] = Basic(
-//   apparatus.core.Decider$$anon$1@39c10d61
+//   apparatus.core.Decider$$anon$1@e2aaa50
 // )
 ```
 
@@ -48,7 +48,7 @@ val doorFsm: FSM[Id, DoorCmd, List[DoorEvt]] =
 val (evts, next) = FSM.run(doorFsm, DoorCmd.Open)
 // evts: List[DoorEvt] = List(Opened)
 // next: FSM[[A >: Nothing <: Any] =>> A, DoorCmd, List[DoorEvt]] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@78fd81fa
+//   apparatus.core.BaseMachineT$$anon$3@5505a44f
 // )
 
 // Multiple steps — folds over a collection, combining outputs via Monoid

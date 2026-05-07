@@ -62,8 +62,8 @@ val light: Decider[LightState, LightCmd, List[LightEvt]] =
     }
 // light: Decider[LightState, LightCmd, List[LightEvt]] = Decider(
 //   state = Off,
-//   decide = apparatus.core.Decider$package$$$Lambda$15308/0x000000e003402d60@1d389687,
-//   evolve = apparatus.core.Decider$package$$$Lambda$15309/0x000000e003403310@663018cd
+//   decide = apparatus.core.Decider$package$$$Lambda$12449/0x000000e002d59100@7dca6075,
+//   evolve = apparatus.core.Decider$package$$$Lambda$12450/0x000000e002d596b0@58382787
 // )
 ```
 
@@ -97,8 +97,8 @@ val history = List(LightEvt.TurnedOn, LightEvt.TurnedOff, LightEvt.TurnedOn)
 val replayed = light.evolveFrom(history)
 // replayed: Decider[LightState, LightCmd, List[LightEvt]] = Decider(
 //   state = On,
-//   decide = apparatus.core.Decider$package$$$Lambda$15310/0x000000e00340c000@7bf72bdc,
-//   evolve = apparatus.core.Decider$package$$$Lambda$15311/0x000000e00340c5b0@55a9ff39
+//   decide = apparatus.core.Decider$package$$$Lambda$12451/0x000000e002d59f68@392eb4cd,
+//   evolve = apparatus.core.Decider$package$$$Lambda$12452/0x000000e002d5a518@42692af4
 // )
 // replayed.state == LightState.On
 ```
@@ -111,13 +111,13 @@ val replayed = light.evolveFrom(history)
 val lightFsm: FSM[Id, LightCmd, List[LightEvt]] =
   FSM.Basic(light.toBaseMachine[Id])
 // lightFsm: FSM[Id, LightCmd, List[LightEvt]] = Basic(
-//   apparatus.core.Decider$$anon$1@38233e79
+//   apparatus.core.Decider$$anon$1@537d925c
 // )
 
 val (fsmEvts1, next) = FSM.run(lightFsm, LightCmd.TurnOn)
 // fsmEvts1: List[LightEvt] = List(TurnedOn)
 // next: FSM[[A >: Nothing <: Any] =>> A, LightCmd, List[LightEvt]] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@419f721c
+//   apparatus.core.BaseMachineT$$anon$3@2770957e
 // )
 val (fsmEvts2, _)    = FSM.run(next,     LightCmd.TurnOff)
 // fsmEvts2: List[LightEvt] = List(TurnedOff)
@@ -141,13 +141,13 @@ val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
       }
       (next, next)
   )
-// projection: BaseMachineT[Id, List[LightEvt], LightStats] = apparatus.core.BaseMachineT$$anon$3@53846d6d
+// projection: BaseMachineT[Id, List[LightEvt], LightStats] = apparatus.core.BaseMachineT$$anon$3@6410f2f7
 
 val network: FSM[Id, LightCmd, LightStats] =
   FSM.Basic(light.toBaseMachine[Id]) >>> FSM.Basic(projection)
 // network: FSM[Id, LightCmd, LightStats] = Sequential(
-//   left = Basic(apparatus.core.Decider$$anon$1@2e2dd361),
-//   right = Basic(apparatus.core.BaseMachineT$$anon$3@53846d6d)
+//   left = Basic(apparatus.core.Decider$$anon$1@5e2a11fb),
+//   right = Basic(apparatus.core.BaseMachineT$$anon$3@6410f2f7)
 // )
 
 given cats.kernel.Monoid[LightStats] =
