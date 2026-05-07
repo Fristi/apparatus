@@ -97,8 +97,6 @@ extension [F[_], A, B](left: FSM[F, A, B]) {
 
   /** Map input via a partial function; returns [[Monoid.empty]] for the output (without
    * advancing state) when the function is undefined for the given input.
-   * Unlike [[lmapPartial]] (which requires [[MonoidK]] on the effect), this variant
-   * requires only [[Monoid]] on the output type and works with the `Id` effect.
    */
   def lmapOrEmpty[C](pf: PartialFunction[C, A])(using m: Monoid[B]): FSM[F, C, B] =
     FSM.LmapOrEmpty(left, pf, m)
