@@ -1,8 +1,11 @@
 package apparatus.core
 
 import cats.*
-import cats.data.NonEmptySet
+import cats.data.{NonEmptySet, OptionT}
 import cats.implicits.*
+
+
+type Optional[A] = OptionT[Id, A]
 
 // ── Flight ────────────────────────────────────────────────────────────────────
 
@@ -98,112 +101,107 @@ val behavior = new SagaBehavior[BookingCommand] {
   }
 }
 
-val bookingDecider: FSM[Id, BookingCommand, List[SagaEvent]] = FSM.Basic(behavior.decider.toBaseMachine)
+val bookingDecider: FSM[Optional, BookingCommand, List[SagaEvent]] = FSM.Basic(behavior.decider.toBaseMachine)
+
+// ── Services wiring ───────────────────────────────────────────────────────────
+//
+// Bidirectional feedback loop:
+//   bookingDecider emits List[SagaEvent]
+//     → each SagaEvent routed to the matching sub-decider via `or` + `dimap`
+//     → sub-decider emits its domain events (e.g. FlightEvent.Reserved)
+//     → rmap translates domain events back to BookingCommand
+//     → BookingCommand fed back into bookingDecider
+
+def makeServices(
+  flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
+  car:    Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
+  hotel:  Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
+): FSM[Optional, SagaEvent, List[BookingCommand]] ={
+
+  val flightFSM: FSM[Optional, SagaEvent, List[BookingCommand]] = FSM.Basic(flight.toBaseMachine[Optional])
+    .lmapPartial[SagaEvent] {
+      case SagaEvent.Booted("Flight", _) | SagaEvent.StepStarted("Flight") => FlightCommand.Reserve
+      case SagaEvent.CompensationTriggered("Flight", _) | SagaEvent.CompensationStarted("Flight") => FlightCommand.Compensate
+    }
+    .rmap {
+      _.collect {
+        case FlightEvent.Reserved => BookingCommand.MarkFlightComplete
+        case FlightEvent.Failed => BookingCommand.MarkFlightFailed
+        case FlightEvent.Compensated => BookingCommand.MarkFlightCompensationComplete
+      }
+    }
+
+  val carFSM: FSM[Optional, SagaEvent, List[BookingCommand]] = FSM.Basic(car.toBaseMachine[Optional])
+    .lmapPartial[SagaEvent] {
+      case SagaEvent.Booted("Car", _) | SagaEvent.StepStarted("Car") => CarCommand.Reserve
+      case SagaEvent.CompensationTriggered("Car", _) | SagaEvent.CompensationStarted("Car") => CarCommand.Compensate
+    }
+    .rmap {
+      _.collect {
+        case CarEvent.Reserved => BookingCommand.MarkCarComplete
+        case CarEvent.Failed => BookingCommand.MarkCarFailed
+        case CarEvent.Compensated => BookingCommand.MarkCarCompensationComplete
+      }
+    }
+
+  val hotelFSM: FSM[Optional, SagaEvent, List[BookingCommand]] = FSM.Basic(hotel.toBaseMachine[Optional])
+    .lmapPartial[SagaEvent] {
+      case SagaEvent.Booted("Hotel", _) | SagaEvent.StepStarted("Hotel") => HotelCommand.Reserve
+      case SagaEvent.CompensationTriggered("Hotel", _) | SagaEvent.CompensationStarted("Hotel") => HotelCommand.Compensate
+    }
+    .rmap {
+      _.collect {
+        case HotelEvent.Reserved => BookingCommand.MarkCarComplete
+        case HotelEvent.Failed => BookingCommand.MarkCarFailed
+        case HotelEvent.Compensated => BookingCommand.MarkCarCompensationComplete
+      }
+    }
+
+  (hotelFSM <+> carFSM) <+> flightFSM
+}
 
 
-//def rehydrate(cmds: List[SagaCommand]): SagaState[BookingEvent] =
-//  cmds.foldLeft(SagaState.Waiting: SagaState[BookingEvent])((s, c) => sagaNext(s, c)._2)
+def saga(
+  flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
+  car:    Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
+  hotel:  Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
+): FSM[Optional, BookingCommand, List[SagaEvent]] =
+  bookingDecider <-> makeServices(flight, car, hotel)
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 //
-//def orchestratorFrom(state: SagaState[BookingEvent]): FSM[Id, SagaCommand, List[BookingEvent]] =
-//  FSM.Basic(BaseMachineT[Id, SagaState[BookingEvent], SagaCommand, List[BookingEvent]](state, sagaNext))
+// Steps sorted alphabetically: Car → Flight → Hotel
+// (NonEmptySet.of("Flight","Hotel","Car").head == "Car")
+
+class BookingSagaSpec extends munit.FunSuite:
+
+  test("happy path: all steps complete in order"):
+    assertEquals(
+      FSM.runA(saga(), BookingCommand.Start),
+      OptionT.some[Id](List(
+        SagaEvent.Booted("Car", Set("Flight", "Hotel")),
+        SagaEvent.StepProgressed("Car", SagaStepResult.Completed),
+        SagaEvent.StepStarted("Flight"),
+        SagaEvent.StepProgressed("Flight", SagaStepResult.Completed),
+        SagaEvent.StepStarted("Hotel"),
+        SagaEvent.StepProgressed("Hotel", SagaStepResult.Completed)
+      ))
+    )
+
+//  test("hotel fails: compensation triggered for completed steps"):
+//    val events = FSM.runA(saga(hotel = hotelDecider(failsOnReserve = true)), BookingCommand.Start)
+//    assert(events.contains(SagaEvent.StepProgressed("Hotel", SagaStepResult.Failed)))
+//    assert(events.exists { case SagaEvent.CompensationTriggered(_, _) => true; case _ => false })
+//    assert(events.exists { case SagaEvent.CompensationProgressed("Car",  SagaStepResult.Completed) => true; case _ => false })
+//    assert(events.exists { case SagaEvent.CompensationProgressed("Flight", SagaStepResult.Completed) => true; case _ => false })
 //
-//val orchestrator: FSM[Id, SagaCommand, List[BookingEvent]] =
-//  orchestratorFrom(SagaState.Waiting)
+//  test("car fails: only car compensated (flight not yet started)"):
+//    val events = FSM.runA(saga(car = carDecider(failsOnReserve = true)), BookingCommand.Start)
+//    assert(events.contains(SagaEvent.StepProgressed("Car", SagaStepResult.Failed)))
+//    assert(!events.exists { case SagaEvent.CompensationStarted(_) => true; case _ => false })
 //
-//def makeServices(
-//                  flight: FSM[Id, FlightCommand, List[FlightEvent]],
-//                  car:    FSM[Id, CarCommand,    List[CarEvent]],
-//                  hotel:  FSM[Id, HotelCommand,  List[HotelEvent]]
-//                ): FSM[Id, BookingEvent, List[SagaCommand]] =
-//  flight.or(car.or(hotel)).dimap(
-//    (evt: BookingEvent) => evt match
-//      case BookingEvent.ToFlight(cmd) => Left(cmd)
-//      case BookingEvent.ToCar(cmd)    => Right(Left(cmd))
-//      case BookingEvent.ToHotel(cmd)  => Right(Right(cmd))
-//  ) {
-//    case Left(evts)         => evts.map(SagaCommand.FlightResponse(_))
-//    case Right(Left(evts))  => evts.map(SagaCommand.CarResponse(_))
-//    case Right(Right(evts)) => evts.map(SagaCommand.HotelResponse(_))
-//  }
-//
-//// ── Tests ─────────────────────────────────────────────────────────────────────
-//
-//class BookingSagaSpec extends munit.FunSuite:
-//
-//  def saga(
-//            flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
-//            car:    Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
-//            hotel:  Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
-//          ): FSM[Id, SagaCommand, List[BookingEvent]] =
-//    orchestrator <-> makeServices(
-//      FSM.Basic(flight.toBaseMachine[Id]),
-//      FSM.Basic(car.toBaseMachine[Id]),
-//      FSM.Basic(hotel.toBaseMachine[Id])
-//    )
-//
-//  test("happy path: full reservation command trail"):
-//    assertEquals(
-//      FSM.runA(saga(), SagaCommand.Start),
-//      List(
-//        BookingEvent.ToFlight(FlightCommand.Reserve),
-//        BookingEvent.ToCar(CarCommand.Reserve),
-//        BookingEvent.ToHotel(HotelCommand.Reserve)
-//      )
-//    )
-//
-//  test("hotel fails: car and flight compensated in reverse"):
-//    assertEquals(
-//      FSM.runA(saga(hotel = hotelDecider(failsOnReserve = true)), SagaCommand.Start),
-//      List(
-//        BookingEvent.ToFlight(FlightCommand.Reserve),
-//        BookingEvent.ToCar(CarCommand.Reserve),
-//        BookingEvent.ToHotel(HotelCommand.Reserve),
-//        BookingEvent.ToCar(CarCommand.Compensate),
-//        BookingEvent.ToFlight(FlightCommand.Compensate)
-//      )
-//    )
-//
-//  test("car fails: only flight compensated"):
-//    assertEquals(
-//      FSM.runA(saga(car = carDecider(failsOnReserve = true)), SagaCommand.Start),
-//      List(
-//        BookingEvent.ToFlight(FlightCommand.Reserve),
-//        BookingEvent.ToCar(CarCommand.Reserve),
-//        BookingEvent.ToFlight(FlightCommand.Compensate)
-//      )
-//    )
-//
-//  test("flight fails: nothing to compensate"):
-//    assertEquals(
-//      FSM.runA(saga(flight = flightDecider(failsOnReserve = true)), SagaCommand.Start),
-//      List(BookingEvent.ToFlight(FlightCommand.Reserve))
-//    )
-//
-//  test("service state respected: Compensate on Idle emits nothing"):
-//    assertEquals(
-//      FSM.runA(saga(car = carDecider(failsOnReserve = true), hotel = hotelDecider(failsOnReserve = true)), SagaCommand.Start),
-//      List(
-//        BookingEvent.ToFlight(FlightCommand.Reserve),
-//        BookingEvent.ToCar(CarCommand.Reserve),
-//        BookingEvent.ToFlight(FlightCommand.Compensate)
-//      )
-//    )
-//
-//  test("rehydration: saga continues after async pause at hotel step"):
-//    // Simulate: Start + flight reserved + car reserved, then crash before hotel response
-//    val pastSagaCmds = List(
-//      SagaCommand.Start,
-//      SagaCommand.FlightResponse(FlightEvent.Reserved),
-//      SagaCommand.CarResponse(CarEvent.Reserved)
-//    )
-//    // Reconstruct FSM network from persisted saga state + replayed entity event streams
-//    val network = orchestratorFrom(rehydrate(pastSagaCmds)) <-> makeServices(
-//      FSM.Basic(flightDecider().evolveFrom(List(FlightEvent.Reserved)).toBaseMachine[Id]),
-//      FSM.Basic(carDecider().evolveFrom(List(CarEvent.Reserved)).toBaseMachine[Id]),
-//      FSM.Basic(hotelDecider().evolveFrom(List(HotelEvent.Reserved)).toBaseMachine[Id])
-//    )
-//    // Hotel Kafka confirmation finally arrives
-//    assertEquals(
-//      FSM.runA(network, SagaCommand.HotelResponse(HotelEvent.Reserved)),
-//      List.empty[BookingEvent]  // all reserved, saga succeeded, no more commands
-//    )
+//  test("flight fails: car compensated"):
+//    val events = FSM.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
+//    assert(events.contains(SagaEvent.StepProgressed("Flight", SagaStepResult.Failed)))
+//    assert(events.exists { case SagaEvent.CompensationProgressed("Car", SagaStepResult.Completed) => true; case _ => false })
+//    assert(!events.exists { case SagaEvent.CompensationProgressed("Flight", _) => true; case _ => false })

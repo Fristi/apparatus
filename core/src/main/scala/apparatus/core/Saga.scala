@@ -74,35 +74,41 @@ trait SagaBehavior[Cmd]:
       }
     case _ => Nil
   }
-  final def evolve(state: SagaState, evt: SagaEvent): SagaState = state match {
-    case SagaState.Waiting =>
-      evt match {
-        case SagaEvent.Booted(startStep, todo) => SagaState.Running(startStep, todo, Set.empty)
-        case _ => state
-      }
-    case SagaState.Running(current, todo, compensation) =>
-      evt match {
-        case SagaEvent.StepStarted(name) => SagaState.Running(name, todo, compensation)
-        case SagaEvent.StepProgressed(name, result) =>
-          result match {
-            case SagaStepResult.Completed => SagaState.Running(current, todo - name, compensation + name)
-            case _ => state
-          }
-        case SagaEvent.CompensationTriggered(current, todo) => SagaState.Compensating(current, todo)
-        case _ => state
-      }
-    case SagaState.Compensating(current, todo) =>
-      evt match {
-        case SagaEvent.CompensationStarted(name) => SagaState.Compensating(name, todo)
-        case SagaEvent.CompensationProgressed(name, result) =>
-          result match {
-            case SagaStepResult.Completed => SagaState.Compensating(current, todo - name)
-            case _ => state
-          }
-        case _ => state
-      }
+  final def evolve(state: SagaState, evt: SagaEvent): SagaState = {
+    println(s"state: $state, event: $evt")
 
-    case _ => state
+    state match {
+      case SagaState.Waiting =>
+        evt match {
+          case SagaEvent.Booted(startStep, todo) => SagaState.Running(startStep, todo, Set.empty)
+          case _ => state
+        }
+      case SagaState.Running(current, todo, compensation) =>
+        evt match {
+          case SagaEvent.StepStarted(name) => SagaState.Running(name, todo - name, compensation)
+          case SagaEvent.StepProgressed(name, result) =>
+            result match {
+              case SagaStepResult.Completed =>
+                SagaState.Running(current, todo - name, compensation + name)
+              case _ => state
+            }
+          case SagaEvent.CompensationTriggered(current, todo) => SagaState.Compensating(current, todo)
+          case _ => state
+        }
+      case SagaState.Compensating(current, todo) =>
+        evt match {
+          case SagaEvent.CompensationStarted(name) => SagaState.Compensating(name, todo - name)
+          case SagaEvent.CompensationProgressed(name, result) =>
+            result match {
+              case SagaStepResult.Completed =>
+                SagaState.Compensating(current, todo - name)
+              case _ => state
+            }
+          case _ => state
+        }
+
+      case _ => state
+    }
   }
 
   def decider: Decider[SagaState, Cmd, List[SagaEvent]] =
