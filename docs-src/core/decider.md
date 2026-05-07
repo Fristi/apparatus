@@ -11,7 +11,7 @@ event-sourced systems. It separates two concerns:
 Because both functions are **pure**, they are trivially testable in isolation and composable with
 any effect stack via `toBaseMachine`.
 
-```scala
+```scala mdoc
 import apparatus.core.*
 import cats.Id
 import cats.implicits.*
@@ -39,7 +39,7 @@ Command ──► decide(cmd, state) ──► [Event, …]
 
 Use `DeciderBuilder` for a fluent construction API:
 
-```scala
+```scala mdoc
 // Domain
 enum LightState { case Off, On }
 enum LightCmd   { case TurnOn, TurnOff }
@@ -60,46 +60,30 @@ val light: Decider[LightState, LightCmd, List[LightEvt]] =
         case (LightState.On,  LightEvt.TurnedOff) => LightState.Off
         case _                                     => state
     }
-// light: Decider[LightState, LightCmd, List[LightEvt]] = Decider(
-//   state = Off,
-//   decide = apparatus.core.Decider$package$$$Lambda$12449/0x000000e002d59100@7dca6075,
-//   evolve = apparatus.core.Decider$package$$$Lambda$12450/0x000000e002d596b0@58382787
-// )
 ```
 
 ## Testing decide and evolve in isolation
 
 Because both functions are pure you can call them directly without any FSM machinery:
 
-```scala
+```scala mdoc
 // decide
 val evts1 = light.decide(LightCmd.TurnOn,  LightState.Off)
-// evts1: List[LightEvt] = List(TurnedOn)
 val evts2 = light.decide(LightCmd.TurnOn,  LightState.On)   // idempotent guard
-// evts2: List[LightEvt] = List()
 val evts3 = light.decide(LightCmd.TurnOff, LightState.On)
-// evts3: List[LightEvt] = List(TurnedOff)
 
 // evolve
 val s1 = light.evolve(List(LightEvt.TurnedOn), LightState.Off)
-// s1: LightState = On
 val s2 = light.evolve(Nil, LightState.Off)
-// s2: LightState = Off
 ```
 
 ## Replaying an event stream
 
 `evolveFrom` rebuilds the aggregate state from a persisted event log:
 
-```scala
+```scala mdoc
 val history = List(LightEvt.TurnedOn, LightEvt.TurnedOff, LightEvt.TurnedOn)
-// history: List[LightEvt] = List(TurnedOn, TurnedOff, TurnedOn)
 val replayed = light.evolveFrom(history)
-// replayed: Decider[LightState, LightCmd, List[LightEvt]] = Decider(
-//   state = On,
-//   decide = apparatus.core.Decider$package$$$Lambda$12451/0x000000e002d59f68@392eb4cd,
-//   evolve = apparatus.core.Decider$package$$$Lambda$12452/0x000000e002d5a518@42692af4
-// )
 // replayed.state == LightState.On
 ```
 
@@ -107,20 +91,12 @@ val replayed = light.evolveFrom(history)
 
 `toBaseMachine[F]` converts the decider into a `BaseMachineT` running in any `Applicative` `F`:
 
-```scala
+```scala mdoc
 val lightFsm: FSM[Id, LightCmd, List[LightEvt]] =
   FSM.Basic(light.toBaseMachine[Id])
-// lightFsm: FSM[Id, LightCmd, List[LightEvt]] = Basic(
-//   apparatus.core.Decider$$anon$1@537d925c
-// )
 
 val (fsmEvts1, next) = FSM.run(lightFsm, LightCmd.TurnOn)
-// fsmEvts1: List[LightEvt] = List(TurnedOn)
-// next: FSM[[A >: Nothing <: Any] =>> A, LightCmd, List[LightEvt]] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@2770957e
-// )
 val (fsmEvts2, _)    = FSM.run(next,     LightCmd.TurnOff)
-// fsmEvts2: List[LightEvt] = List(TurnedOff)
 ```
 
 ## Composing with a projection
@@ -128,7 +104,7 @@ val (fsmEvts2, _)    = FSM.run(next,     LightCmd.TurnOff)
 Because `toBaseMachine` returns a `BaseMachineT`, you can pipe it into a projection machine with
 `>>>`. The decider emits events; the projection folds them into a read model.
 
-```scala
+```scala mdoc
 case class LightStats(on: Int, off: Int)
 
 val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
@@ -141,14 +117,9 @@ val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
       }
       (next, next)
   )
-// projection: BaseMachineT[Id, List[LightEvt], LightStats] = apparatus.core.BaseMachineT$$anon$3@6410f2f7
 
 val network: FSM[Id, LightCmd, LightStats] =
   FSM.Basic(light.toBaseMachine[Id]) >>> FSM.Basic(projection)
-// network: FSM[Id, LightCmd, LightStats] = Sequential(
-//   left = Basic(apparatus.core.Decider$$anon$1@5e2a11fb),
-//   right = Basic(apparatus.core.BaseMachineT$$anon$3@6410f2f7)
-// )
 
 given cats.kernel.Monoid[LightStats] =
   cats.kernel.Monoid.instance(LightStats(0, 0), (a, b) => LightStats(a.on max b.on, a.off max b.off))
@@ -156,7 +127,6 @@ given cats.kernel.Monoid[LightStats] =
 val (stats, _) = FSM.runMultiple(network, List(
   LightCmd.TurnOn, LightCmd.TurnOff, LightCmd.TurnOn
 ))
-// stats: LightStats = LightStats(on = 2, off = 1)
 ```
 
 ## Fallible commands
@@ -164,7 +134,7 @@ val (stats, _) = FSM.runMultiple(network, List(
 Use `withError` / `partiallyDecide` / `evolveErrorList` when some commands are invalid and you
 want to surface that as `Either[E, List[O]]`:
 
-```scala
+```scala mdoc:silent
 enum Error { case InvalidCommand }
 
 val safeDoor =

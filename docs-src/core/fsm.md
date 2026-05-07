@@ -4,7 +4,7 @@
 call to `runWith` returns the output **and** a new `FSM` carrying updated internal state, making
 the whole structure purely functional and replayable.
 
-```scala
+```scala mdoc
 import apparatus.core.*
 import cats.Id
 import cats.implicits.*
@@ -14,7 +14,7 @@ import cats.implicits.*
 
 The simplest way to get an `FSM` is to wrap a `Decider` (or any `BaseMachineT`):
 
-```scala
+```scala mdoc
 enum DoorState { case Closed, Open }
 enum DoorCmd   { case Open, Close }
 enum DoorEvt   { case Opened, Closed }
@@ -28,32 +28,19 @@ val door: Decider[DoorState, DoorCmd, List[DoorEvt]] =
       case (DoorState.Closed, DoorEvt.Opened) => DoorState.Open
       case (DoorState.Open,   DoorEvt.Closed) => DoorState.Closed
       case (s, _)                              => s
-// door: Decider[DoorState, DoorCmd, List[DoorEvt]] = Decider(
-//   state = Closed,
-//   decide = apparatus.core.Decider$package$$$Lambda$12449/0x000000e002d59100@1aeb9074,
-//   evolve = apparatus.core.Decider$package$$$Lambda$12450/0x000000e002d596b0@df5ea73
-// )
 
 val doorFsm: FSM[Id, DoorCmd, List[DoorEvt]] =
   FSM.Basic(door.toBaseMachine[Id])
-// doorFsm: FSM[Id, DoorCmd, List[DoorEvt]] = Basic(
-//   apparatus.core.Decider$$anon$1@e2aaa50
-// )
 ```
 
 ## Running a machine
 
-```scala
+```scala mdoc
 // Single step — returns (output, updated machine)
 val (evts, next) = FSM.run(doorFsm, DoorCmd.Open)
-// evts: List[DoorEvt] = List(Opened)
-// next: FSM[[A >: Nothing <: Any] =>> A, DoorCmd, List[DoorEvt]] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@5505a44f
-// )
 
 // Multiple steps — folds over a collection, combining outputs via Monoid
 val (allEvts, _) = FSM.runMultiple(doorFsm, List(DoorCmd.Open, DoorCmd.Close, DoorCmd.Open))
-// allEvts: List[DoorEvt] = List(Opened, Closed, Opened)
 ```
 
 `runA` / `runMultipleA` discard the updated machine when you only need the output.
@@ -68,7 +55,7 @@ Pipe output of the left machine directly into the right machine's input each ste
 A ──► [left: A→B] ──► B ──► [right: B→C] ──► C
 ```
 
-```scala
+```scala mdoc:silent
 val pipeline: FSM[Id, DoorCmd, String] =
   doorFsm >>> FSM.Basic(BaseMachineT.stateless[Id, List[DoorEvt], String](evts => evts.mkString(",")))
 ```
@@ -81,7 +68,7 @@ Run two independent machines on the two halves of a pair simultaneously.
 (A, C) ──► [left: A→B] × [right: C→D] ──► (B, D)
 ```
 
-```scala
+```scala mdoc:silent
 val paired: FSM[Id, (DoorCmd, DoorCmd), (List[DoorEvt], List[DoorEvt])] =
   doorFsm *** doorFsm
 ```
@@ -95,7 +82,7 @@ Left(A)  ──► [left:  A→B] ──► Left(B)
 Right(C) ──► [right: C→D] ──► Right(D)
 ```
 
-```scala
+```scala mdoc:silent
 val router: FSM[Id, Either[DoorCmd, DoorCmd], Either[List[DoorEvt], List[DoorEvt]]] =
   doorFsm ||| doorFsm
 ```
@@ -120,7 +107,7 @@ Given initial input `a`:
 Both machines carry independent state across iterations. `N` must have `Foldable` and `Monoid`
 instances (typically `List`).
 
-```scala
+```scala mdoc:silent
 // Contrived example: bounce door commands back-and-forth
 val echo: FSM[Id, DoorEvt, List[DoorCmd]] =
   FSM.Basic(BaseMachineT.stateless[Id, DoorEvt, List[DoorCmd]] {
@@ -135,9 +122,9 @@ val loop: FSM[Id, DoorCmd, List[DoorEvt]] =
 ### `lmapOrEmpty`
 
 Contramap via a **partial function**. When the function is undefined for the given input the
-machine's state is **not advanced** and `Monoid.empty` is returned for the output. 
+machine's state is **not advanced** and `Monoid.empty` is returned for the output.
 
-```scala
+```scala mdoc:silent
 // Only feed Open commands to doorFsm; ignore everything else
 val openOnly: FSM[Id, Option[DoorCmd], List[DoorEvt]] =
   doorFsm.lmapOrEmpty { case Some(DoorCmd.Open) => DoorCmd.Open }
@@ -146,7 +133,7 @@ val openOnly: FSM[Id, Option[DoorCmd], List[DoorEvt]] =
 This combinator is especially useful when multiple service machines share the same input stream
 (e.g. `List[SagaEvent]`) but each only cares about a subset of events:
 
-```scala
+```scala mdoc:silent
 // Each sub-machine is silent (List.empty) for unrecognised events
 val flightMachine: FSM[Id, SagaEvent[String], List[String]] =
   FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("flight-ack")))
@@ -168,7 +155,7 @@ A ───────┤                        ├──► combine(B, B)
 doesn't own, and `merge` fans the same event out to all of them, collecting the one non-empty
 result.
 
-```scala
+```scala mdoc:silent
 val hotelMachine: FSM[Id, SagaEvent[String], List[String]] =
   FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("hotel-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("hotel") => "hotel" }
@@ -209,7 +196,7 @@ val services: FSM[Id, SagaEvent[String], List[String]] =
 `mapK` converts the effect type via a natural transformation `F ~> G`, letting you lift an
 `FSM[Id, I, O]` into `FSM[IO, I, O]` for production use while keeping pure `Id`-based tests:
 
-```scala
+```scala mdoc:silent
 import cats.~>
 import cats.effect.IO
 

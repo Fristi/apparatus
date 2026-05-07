@@ -3,7 +3,7 @@
 This guide walks from zero to a working networked FSM. It uses a door that opens after three
 knocks and can be closed again.
 
-```scala
+```scala mdoc
 import apparatus.core.*
 import cats.Id
 import cats.implicits.*
@@ -13,7 +13,7 @@ import cats.implicits.*
 
 Define state, commands, and events as sealed types.
 
-```scala
+```scala mdoc
 enum DoorState:
   case Closed(knocked: Int)
   case Open
@@ -35,8 +35,8 @@ enum DoorEvent:
 - `decide` — given the current state and a command, what events should happen?
 - `evolve` — given the current state and one event, what is the next state?
 
-```scala
-val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
+```scala mdoc
+val doorExplicit: Decider[DoorState, DoorCommand, List[DoorEvent]] =
   DeciderBuilder
     .seed[DoorState](DoorState.Closed(0))
     .decide[DoorCommand, List[DoorEvent]] { (state, cmd) =>
@@ -58,7 +58,7 @@ val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
 
 `partiallyDecide` / `evolveList` is a compact alternative when you only care about matched cases:
 
-```scala
+```scala mdoc
 val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
   DeciderBuilder
     .seed[DoorState](DoorState.Closed(0))
@@ -79,7 +79,7 @@ val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
 Because `decide` and `evolve` are plain functions you can call them directly — no FSM, no effect
 stack, no test kit.
 
-```scala
+```scala mdoc
 // decide
 assert(door.decide(DoorCommand.Knock, DoorState.Closed(0)) == List(DoorEvent.Knocked))
 assert(door.decide(DoorCommand.Knock, DoorState.Closed(2)) == List(DoorEvent.Opened))
@@ -95,24 +95,22 @@ assert(door.evolve(List(DoorEvent.Opened),  DoorState.Closed(2)) == DoorState.Op
 `toBaseMachine[F]` turns the `Decider` into a `BaseMachineT` running in effect `F`.
 Wrap it in `FSM.Basic` to get a composable machine.
 
-```scala
+```scala mdoc
 val doorFsm: FSM[Id, DoorCommand, List[DoorEvent]] =
   FSM.Basic(door.toBaseMachine[Id])
 
 val (events, nextFsm) = FSM.run(doorFsm, DoorCommand.Knock)
-// events: List(Knocked)
 ```
 
 Use `FSM.runMultiple` to feed multiple commands, accumulating outputs via `Monoid`:
 
-```scala
+```scala mdoc
 val (allEvents, _) = FSM.runMultiple(doorFsm, List(
   DoorCommand.Knock,
   DoorCommand.Knock,
   DoorCommand.Knock,  // third knock opens the door
   DoorCommand.Close
 ))
-// allEvents: List(Knocked, Knocked, Opened, Closed)
 ```
 
 ## 5. Add a projection
@@ -120,7 +118,7 @@ val (allEvents, _) = FSM.runMultiple(doorFsm, List(
 A projection is a `BaseMachineT` that folds events into a read model. Chain it with `>>>` so
 every event the decider emits flows straight into the projection.
 
-```scala
+```scala mdoc
 case class DoorStats(opened: Int, closed: Int)
 
 val projection: BaseMachineT[Id, List[DoorEvent], DoorStats] =
@@ -147,7 +145,6 @@ val (stats, _) = FSM.runMultiple(network, List(
   DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock, // open again
   DoorCommand.Close                                         // close again
 ))
-// stats: DoorStats(opened = 2, closed = 2)
 ```
 
 ## 6. Change effect (Id → IO)
@@ -155,7 +152,7 @@ val (stats, _) = FSM.runMultiple(network, List(
 Machines built with `Id` are easy to test. Use `mapK` to lift them into any other effect for
 production use:
 
-```scala
+```scala mdoc
 import cats.effect.IO
 import cats.~>
 
