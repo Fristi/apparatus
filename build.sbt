@@ -24,6 +24,7 @@ lazy val core = (project in file("core"))
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-core"         % "2.13.0",
       "dev.zio"       %% "zio-blocks-schema" % "0.0.33",
+      "org.typelevel" %% "kittens"   % "3.5.0" % Test,
       "org.scalameta" %% "munit"             % "1.3.0" % Test
     )
   )

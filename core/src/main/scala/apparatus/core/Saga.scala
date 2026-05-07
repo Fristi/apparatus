@@ -1,47 +1,53 @@
 package apparatus.core
 
 import cats.*
+import cats.implicits.*
 import cats.data.NonEmptySet
+import scala.collection.immutable.SortedSet
 
-enum SagaState:
-  case Waiting
-  case Succeeded
-  case Failed
-  case Running(current: String, todo: Set[String], compensation: Set[String])
-  case Compensating(current: String, todo: Set[String])
+sealed trait SagaState[Step]
+
+object SagaState {
+  case class Waiting[Step]() extends SagaState[Step]
+  case class Succeeded[Step]() extends SagaState[Step]
+  case class Failed[Step]() extends SagaState[Step]
+
+  case class Running[Step](current: Step, todo: SortedSet[Step], compensation: SortedSet[Step]) extends SagaState[Step]
+  case class Compensating[Step](current: Step, todo: SortedSet[Step]) extends SagaState[Step]
+}
 
 enum SagaStepResult { case Completed, Failed }
 
-enum SagaEvent:
-  case Booted(startStep: String, todo: Set[String])
-  case StepStarted(name: String)
-  case StepProgressed(name: String, result: SagaStepResult)
-  case CompensationTriggered(startStep: String, todo: Set[String])
-  case CompensationStarted(name: String)
-  case CompensationProgressed(name: String, result: SagaStepResult)
+enum SagaEvent[Step]:
+  case Booted(startStep: Step, todo: SortedSet[Step])
+  case StepStarted(name: Step)
+  case StepProgressed(name: Step, result: SagaStepResult)
+  case CompensationTriggered(startStep: Step, todo: SortedSet[Step])
+  case CompensationStarted(name: Step)
+  case CompensationProgressed(name: Step, result: SagaStepResult)
 
-trait SagaBehavior[Cmd]:
+trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
   def startCommand: Cmd
-  def steps: NonEmptySet[String]
-  def compensationHandler: PartialFunction[Cmd, (String, SagaStepResult)]
-  def stepHandler: PartialFunction[Cmd, (String, SagaStepResult)]
+  def steps: NonEmptySet[Step]
+  def compensationHandler: PartialFunction[Cmd, (Step, SagaStepResult)]
+  def stepHandler: PartialFunction[Cmd, (Step, SagaStepResult)]
 
-  final def decide(state: SagaState, cmd: Cmd): List[SagaEvent] = state match {
-    case SagaState.Waiting => if(cmd == startCommand) List(SagaEvent.Booted(steps.head, steps.tail)) else Nil
+  final def decide(state: SagaState[Step], cmd: Cmd): List[SagaEvent[Step]] = state match {
+    case SagaState.Waiting() => if(cmd == startCommand) List(SagaEvent.Booted(steps.head, steps.tail)) else Nil
     case SagaState.Running(current, todo, compensation) =>
       stepHandler.unapply(cmd) match {
         case Some((stepName, result)) =>
           result match {
             case SagaStepResult.Completed =>
-              if(current == stepName) {
+              if(current === stepName) {
                 List(SagaEvent.StepProgressed(stepName, result)) ++ todo.headOption.map(SagaEvent.StepStarted(_))
               } else {
                 Nil
               }
             case SagaStepResult.Failed =>
-              if(current == stepName) {
-                val progressEvent = List(SagaEvent.StepProgressed(stepName, result))
-                val triggeredEvent = compensation.headOption.map(SagaEvent.CompensationTriggered(_, compensation.tail)).toList
+              if(current === stepName) {
+                val progressEvent: List[SagaEvent[Step]] = List(SagaEvent.StepProgressed(stepName, result))
+                val triggeredEvent: List[SagaEvent[Step]] = compensation.headOption.map(step => SagaEvent.CompensationTriggered(step, compensation.tail)).toList
 
                 progressEvent  ++ triggeredEvent
               } else {
@@ -56,13 +62,13 @@ trait SagaBehavior[Cmd]:
         case Some((stepName, result)) =>
           result match {
             case SagaStepResult.Completed =>
-              if(current == stepName) {
+              if(current === stepName) {
                 List(SagaEvent.CompensationProgressed(stepName, result)) ++ todo.headOption.map(SagaEvent.CompensationStarted(_))
               } else {
                 Nil
               }
             case SagaStepResult.Failed =>
-              if(current == stepName) {
+              if(current === stepName) {
                 val progressEvent = List(SagaEvent.CompensationProgressed(stepName, result))
                 val startEvent = todo.headOption.map(SagaEvent.CompensationStarted(_)).toList
                 progressEvent ++ startEvent
@@ -74,13 +80,11 @@ trait SagaBehavior[Cmd]:
       }
     case _ => Nil
   }
-  final def evolve(state: SagaState, evt: SagaEvent): SagaState = {
-    println(s"state: $state, event: $evt")
-
+  final def evolve(state: SagaState[Step], evt: SagaEvent[Step]): SagaState[Step] =
     state match {
-      case SagaState.Waiting =>
+      case SagaState.Waiting() =>
         evt match {
-          case SagaEvent.Booted(startStep, todo) => SagaState.Running(startStep, todo, Set.empty)
+          case SagaEvent.Booted(startStep, todo) => SagaState.Running(startStep, todo, SortedSet.empty)
           case _ => state
         }
       case SagaState.Running(current, todo, compensation) =>
@@ -109,9 +113,8 @@ trait SagaBehavior[Cmd]:
 
       case _ => state
     }
-  }
 
-  def decider: Decider[SagaState, Cmd, List[SagaEvent]] =
-    DeciderBuilder.seed[SagaState](SagaState.Waiting)
-      .decide[Cmd, List[SagaEvent]]((s, i) => decide(s, i))
+  def decider: Decider[SagaState[Step], Cmd, List[SagaEvent[Step]]] =
+    DeciderBuilder.seed[SagaState[Step]](SagaState.Waiting())
+      .decide[Cmd, List[SagaEvent[Step]]]((s, i) => decide(s, i))
       .evolveList((s, e) => evolve(s, e))

@@ -3,6 +3,9 @@ package apparatus.core
 import cats.*
 import cats.data.NonEmptySet
 import cats.implicits.*
+import cats.derived.*
+
+import scala.collection.immutable.SortedSet
 
 // ── Flight ────────────────────────────────────────────────────────────────────
 
@@ -76,28 +79,33 @@ enum BookingCommand:
   case MarkCarCompensationFailed
 
 
-val behavior = new SagaBehavior[BookingCommand] {
+enum BookingStep(val position: Int) derives Eq, Order, Show:
+  case Hotel extends BookingStep(1)
+  case Car extends BookingStep(2)
+  case Flight extends BookingStep(3)
+
+val behavior = new SagaBehavior[BookingCommand, BookingStep] {
   override def startCommand: BookingCommand = BookingCommand.Start
-  override def steps: NonEmptySet[String] = NonEmptySet.of("Flight", "Hotel", "Car")
-  override def compensationHandler: PartialFunction[BookingCommand, (String, SagaStepResult)] = {
-    case BookingCommand.MarkFlightCompensationComplete => ("Flight", SagaStepResult.Completed)
-    case BookingCommand.MarkFlightCompensationFailed   => ("Flight", SagaStepResult.Failed)
-    case BookingCommand.MarkHotelCompensationComplete  => ("Hotel",  SagaStepResult.Completed)
-    case BookingCommand.MarkHotelCompensationFailed    => ("Hotel",  SagaStepResult.Failed)
-    case BookingCommand.MarkCarCompensationComplete    => ("Car",    SagaStepResult.Completed)
-    case BookingCommand.MarkCarCompensationFailed      => ("Car",    SagaStepResult.Failed)
+  override def steps: NonEmptySet[BookingStep] = NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)
+  override def compensationHandler: PartialFunction[BookingCommand, (BookingStep, SagaStepResult)] = {
+    case BookingCommand.MarkFlightCompensationComplete => (BookingStep.Flight, SagaStepResult.Completed)
+    case BookingCommand.MarkFlightCompensationFailed   => (BookingStep.Flight, SagaStepResult.Failed)
+    case BookingCommand.MarkHotelCompensationComplete  => (BookingStep.Hotel,  SagaStepResult.Completed)
+    case BookingCommand.MarkHotelCompensationFailed    => (BookingStep.Hotel,  SagaStepResult.Failed)
+    case BookingCommand.MarkCarCompensationComplete    => (BookingStep.Car,    SagaStepResult.Completed)
+    case BookingCommand.MarkCarCompensationFailed      => (BookingStep.Car,    SagaStepResult.Failed)
   }
-  override def stepHandler: PartialFunction[BookingCommand, (String, SagaStepResult)] = {
-    case BookingCommand.MarkFlightComplete => ("Flight", SagaStepResult.Completed)
-    case BookingCommand.MarkFlightFailed   => ("Flight", SagaStepResult.Failed)
-    case BookingCommand.MarkHotelComplete  => ("Hotel",  SagaStepResult.Completed)
-    case BookingCommand.MarkHotelFailed    => ("Hotel",  SagaStepResult.Failed)
-    case BookingCommand.MarkCarComplete    => ("Car",    SagaStepResult.Completed)
-    case BookingCommand.MarkCarFailed      => ("Car",    SagaStepResult.Failed)
+  override def stepHandler: PartialFunction[BookingCommand, (BookingStep, SagaStepResult)] = {
+    case BookingCommand.MarkFlightComplete => (BookingStep.Flight, SagaStepResult.Completed)
+    case BookingCommand.MarkFlightFailed   => (BookingStep.Flight, SagaStepResult.Failed)
+    case BookingCommand.MarkHotelComplete  => (BookingStep.Hotel,  SagaStepResult.Completed)
+    case BookingCommand.MarkHotelFailed    => (BookingStep.Hotel,  SagaStepResult.Failed)
+    case BookingCommand.MarkCarComplete    => (BookingStep.Car,    SagaStepResult.Completed)
+    case BookingCommand.MarkCarFailed      => (BookingStep.Car,    SagaStepResult.Failed)
   }
 }
 
-val bookingDecider: FSM[Id, BookingCommand, List[SagaEvent]] = FSM.Basic(behavior.decider.toBaseMachine)
+val bookingDecider: FSM[Id, BookingCommand, List[SagaEvent[BookingStep]]] = FSM.Basic(behavior.decider.toBaseMachine)
 
 // ── Services wiring ───────────────────────────────────────────────────────────
 //
@@ -115,13 +123,13 @@ def makeServices(
   flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
   car:    Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
   hotel:  Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
-): FSM[Id, SagaEvent, List[BookingCommand]] =
+): FSM[Id, SagaEvent[BookingStep], List[BookingCommand]] =
 
-  val flightFSM: FSM[Id, SagaEvent, List[BookingCommand]] =
+  val flightFSM: FSM[Id, SagaEvent[BookingStep], List[BookingCommand]] =
     FSM.Basic(flight.toBaseMachine[Id])
-      .lmapOrEmpty[SagaEvent] {
-        case SagaEvent.Booted("Flight", _)                | SagaEvent.StepStarted("Flight")         => FlightCommand.Reserve
-        case SagaEvent.CompensationTriggered("Flight", _) | SagaEvent.CompensationStarted("Flight") => FlightCommand.Compensate
+      .lmapOrEmpty[SagaEvent[BookingStep]] {
+        case SagaEvent.Booted(BookingStep.Flight, _)                | SagaEvent.StepStarted(BookingStep.Flight)         => FlightCommand.Reserve
+        case SagaEvent.CompensationTriggered(BookingStep.Flight, _) | SagaEvent.CompensationStarted(BookingStep.Flight) => FlightCommand.Compensate
       }
       .rmap(_.collect {
         case FlightEvent.Reserved    => BookingCommand.MarkFlightComplete
@@ -129,11 +137,11 @@ def makeServices(
         case FlightEvent.Compensated => BookingCommand.MarkFlightCompensationComplete
       })
 
-  val carFSM: FSM[Id, SagaEvent, List[BookingCommand]] =
+  val carFSM: FSM[Id, SagaEvent[BookingStep], List[BookingCommand]] =
     FSM.Basic(car.toBaseMachine[Id])
-      .lmapOrEmpty[SagaEvent] {
-        case SagaEvent.Booted("Car", _)                | SagaEvent.StepStarted("Car")            => CarCommand.Reserve
-        case SagaEvent.CompensationTriggered("Car", _) | SagaEvent.CompensationStarted("Car")    => CarCommand.Compensate
+      .lmapOrEmpty[SagaEvent[BookingStep]] {
+        case SagaEvent.Booted(BookingStep.Car, _)                | SagaEvent.StepStarted(BookingStep.Car)            => CarCommand.Reserve
+        case SagaEvent.CompensationTriggered(BookingStep.Car, _) | SagaEvent.CompensationStarted(BookingStep.Car)    => CarCommand.Compensate
       }
       .rmap(_.collect {
         case CarEvent.Reserved    => BookingCommand.MarkCarComplete
@@ -141,11 +149,11 @@ def makeServices(
         case CarEvent.Compensated => BookingCommand.MarkCarCompensationComplete
       })
 
-  val hotelFSM: FSM[Id, SagaEvent, List[BookingCommand]] =
+  val hotelFSM: FSM[Id, SagaEvent[BookingStep], List[BookingCommand]] =
     FSM.Basic(hotel.toBaseMachine[Id])
-      .lmapOrEmpty[SagaEvent] {
-        case SagaEvent.Booted("Hotel", _)                | SagaEvent.StepStarted("Hotel")          => HotelCommand.Reserve
-        case SagaEvent.CompensationTriggered("Hotel", _) | SagaEvent.CompensationStarted("Hotel")  => HotelCommand.Compensate
+      .lmapOrEmpty[SagaEvent[BookingStep]] {
+        case SagaEvent.Booted(BookingStep.Hotel, _)                | SagaEvent.StepStarted(BookingStep.Hotel)          => HotelCommand.Reserve
+        case SagaEvent.CompensationTriggered(BookingStep.Hotel, _) | SagaEvent.CompensationStarted(BookingStep.Hotel)  => HotelCommand.Compensate
       }
       .rmap(_.collect {
         case HotelEvent.Reserved    => BookingCommand.MarkHotelComplete
@@ -159,13 +167,8 @@ def saga(
   flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
   car:    Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
   hotel:  Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
-): FSM[Id, BookingCommand, List[SagaEvent]] =
+): FSM[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
   bookingDecider <-> makeServices(flight, car, hotel)
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-//
-// Steps sorted alphabetically: Car → Flight → Hotel
-// (NonEmptySet.of("Flight","Hotel","Car").head == "Car")
 
 class BookingSagaSpec extends munit.FunSuite:
 
@@ -173,29 +176,29 @@ class BookingSagaSpec extends munit.FunSuite:
     assertEquals(
       FSM.runA(saga(), BookingCommand.Start),
       List(
-        SagaEvent.Booted("Car", Set("Flight", "Hotel")),
-        SagaEvent.StepProgressed("Car", SagaStepResult.Completed),
-        SagaEvent.StepStarted("Flight"),
-        SagaEvent.StepProgressed("Flight", SagaStepResult.Completed),
-        SagaEvent.StepStarted("Hotel"),
-        SagaEvent.StepProgressed("Hotel", SagaStepResult.Completed)
+        SagaEvent.Booted(BookingStep.Hotel, SortedSet(BookingStep.Car, BookingStep.Flight)),
+        SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
+        SagaEvent.StepStarted(BookingStep.Car),
+        SagaEvent.StepProgressed(BookingStep.Car, SagaStepResult.Completed),
+        SagaEvent.StepStarted(BookingStep.Flight),
+        SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Completed)
       )
     )
 
-  test("hotel fails: compensation triggered for completed steps"):
-    val events = FSM.runA(saga(hotel = hotelDecider(failsOnReserve = true)), BookingCommand.Start)
-    assert(events.contains(SagaEvent.StepProgressed("Hotel", SagaStepResult.Failed)))
+  test("flight fails: compensation triggered for completed steps"):
+    val events = FSM.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
+    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Failed)))
     assert(events.exists { case SagaEvent.CompensationTriggered(_, _) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed("Car",    SagaStepResult.Completed) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed("Flight", SagaStepResult.Completed) => true; case _ => false })
+    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Car,    SagaStepResult.Completed) => true; case _ => false })
+    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
 
   test("flight fails: car compensated, flight not"):
     val events = FSM.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
-    assert(events.contains(SagaEvent.StepProgressed("Flight", SagaStepResult.Failed)))
-    assert(events.exists { case SagaEvent.CompensationProgressed("Car", SagaStepResult.Completed) => true; case _ => false })
-    assert(!events.exists { case SagaEvent.CompensationProgressed("Flight", _) => true; case _ => false })
+    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Failed)))
+    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Car, SagaStepResult.Completed) => true; case _ => false })
+    assert(!events.exists { case SagaEvent.CompensationProgressed(BookingStep.Flight, _) => true; case _ => false })
 
   test("car fails: no compensation needed"):
     val events = FSM.runA(saga(car = carDecider(failsOnReserve = true)), BookingCommand.Start)
-    assert(events.contains(SagaEvent.StepProgressed("Car", SagaStepResult.Failed)))
+    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Car, SagaStepResult.Failed)))
     assert(!events.exists { case SagaEvent.CompensationStarted(_) => true; case _ => false })
