@@ -1,6 +1,6 @@
 package apparatus.core
 
-import cats.{Applicative, Foldable, Functor, Monad, Monoid, MonoidK, Semigroup, SemigroupK, ~>}
+import cats.*
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
 
@@ -26,7 +26,7 @@ sealed trait FSM[F[_], I, O] { outer =>
   def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])]
 
   /** Transform the effect type via a natural transformation. */
-  def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, I, O]
+  def mapK[G[_]](f: F ~> G): FSM[G, I, O]
 }
 
 extension [F[_], A, B](left: FSM[F, A, B]) {
@@ -39,7 +39,7 @@ extension [F[_], A, B](left: FSM[F, A, B]) {
           (_, r2) <- right.runWith(b)
         yield (b, l2.tap(r2))
 
-      def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, A, B] =
+      def mapK[G[_]](f: F ~> G): FSM[G, A, B] =
         left.mapK(f).tap(right.mapK(f))
 
   /** Bidirectional mapping via [[Iso]]: adapt input with `isoIn.from`, output with `isoOut.to`. */
@@ -123,7 +123,7 @@ object FSM:
   case class Basic[F[_], I, O](machine: BaseMachineT[F, I, O]) extends FSM[F, I, O]:
     def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])] =
       machine.step(input).map((o, s) => (o, Basic(BaseMachineT(s, (s, i) => machine.action(s, i)))))
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, I, O] = Basic(machine.mapK(f))
+    def mapK[G[_]](f: F ~> G): FSM[G, I, O] = Basic(machine.mapK(f))
 
   /** Pipes `left`'s output directly into `right`'s input each step. */
   case class Sequential[F[_], A, B, C](left: FSM[F, A, B], right: FSM[F, B, C]) extends FSM[F, A, C]:
@@ -132,7 +132,7 @@ object FSM:
         (o1, l2) <- run(left, input)
         (o2, r2) <- run(right, o1)
       yield (o2, Sequential(l2, r2))
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, A, C] = Sequential(left.mapK(f), right.mapK(f))
+    def mapK[G[_]](f: F ~> G): FSM[G, A, C] = Sequential(left.mapK(f), right.mapK(f))
 
   /** Runs `left` and `right` independently on the two halves of a pair. */
   case class Parallel[F[_], A, B, C, D](left: FSM[F, A, B], right: FSM[F, C, D]) extends FSM[F, (A, C), (B, D)]:
@@ -141,7 +141,7 @@ object FSM:
         (o1, l2) <- run(left, input._1)
         (o2, r2) <- run(right, input._2)
       yield ((o1, o2), Parallel(l2, r2))
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, (A, C), (B, D)] = Parallel(left.mapK(f), right.mapK(f))
+    def mapK[G[_]](f: F ~> G): FSM[G, (A, C), (B, D)] = Parallel(left.mapK(f), right.mapK(f))
 
   /** Routes `Left` inputs to `left` and `Right` inputs to `right`; the unmatched
     * machine keeps its state untouched.
@@ -151,7 +151,7 @@ object FSM:
       input match
         case Left(l)  => run(left, l).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
         case Right(r) => run(right, r).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, Either[A, C], Either[B, D]] = Alternative(left.mapK(f), right.mapK(f))
+    def mapK[G[_]](f: F ~> G): FSM[G, Either[A, C], Either[B, D]] = Alternative(left.mapK(f), right.mapK(f))
 
   /** Closed feedback loop between two machines.
     *
@@ -182,7 +182,7 @@ object FSM:
               result    <- loop(lf2, rf2, foldN.toList(na) ++ tail, monoidNB.combine(acc, nb))
             yield result
       loop(left, right, List(a), monoidNB.empty)
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
+    def mapK[G[_]](f: F ~> G): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
 
   /** Routes input via a partial function; returns [[Monoid.empty]] without advancing state
     * when the function is undefined for the given input.
@@ -192,7 +192,7 @@ object FSM:
       pf.lift(input) match
         case Some(a) => inner.runWith(a).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
         case None    => (mb.empty, this).pure[F]
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
+    def mapK[G[_]](f: F ~> G): FSM[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
 
   /** Runs both machines on the same input; outputs are combined via [[Monoid]].
     * Both machines advance state independently on every step.
@@ -203,7 +203,7 @@ object FSM:
         (b1, l2) <- run(left, input)
         (b2, r2) <- run(right, input)
       yield (mb.combine(b1, b2), Merged(l2, r2, mb))
-    def mapK[G[_]](f: F ~> G)(implicit M: MonoidK[G]): FSM[G, A, B] = Merged(left.mapK(f), right.mapK(f), mb)
+    def mapK[G[_]](f: F ~> G): FSM[G, A, B] = Merged(left.mapK(f), right.mapK(f), mb)
 
   /** Stateless identity machine: passes every input through unchanged. */
   def identity[F[_] : Applicative, A]: FSM[F, A, A] =

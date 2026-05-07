@@ -44,9 +44,7 @@ final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
     new WithDecideDeciderBuilder(initialState, decide)
 
   def partiallyDecide[I, O](decide: PartialFunction[(S, I), List[O]]): WithDecideDeciderBuilder[S, I, List[O]] =
-    new WithDecideDeciderBuilder(initialState, (s, i) => {
-      decide.applyOrElse((s, i), _ => Nil)
-    })
+    new WithDecideDeciderBuilder(initialState, (s, i) => decide.applyOrElse((s, i), _ => Nil))
 }
 
 final class FallibleDeciderBuilder[S, E] private[core] (initialState: S, invalidCommand: E) {
