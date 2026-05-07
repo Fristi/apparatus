@@ -14,16 +14,19 @@ export default defineConfig({
       {
         text: 'Introduction',
         items: [
-          { text: 'Getting Started', link: '/getting-started' },
+          { text: 'What is Apparatus?', link: '/introduction' },
         ],
       },
       {
-        text: 'Modules',
+        text: 'Core of Apparatus',
         items: [
-          { text: 'Core', link: '/core' },
-          { text: 'Doobie', link: '/doobie' },
+          { text: 'Getting Started', link: '/core/getting-started' },
+          { text: 'Basic state machines', link: '/core/base-machine' },
+          { text: 'Eventful state machines', link: '/core/decider' },
+          { text: 'Network of state machines', link: '/core/fsm' },
+          { text: 'Isomorphic mapping', link: '/core/fsm' },
         ],
-      },
+      }
     ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/Fristi/apparatus' },
