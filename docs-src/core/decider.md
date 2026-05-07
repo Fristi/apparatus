@@ -114,7 +114,6 @@ val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
       val next = evts.foldLeft(stats) {
         case (s, LightEvt.TurnedOn)  => s.copy(on  = s.on  + 1)
         case (s, LightEvt.TurnedOff) => s.copy(off = s.off + 1)
-        case (s, _)                   => s
       }
       (next, next)
   )

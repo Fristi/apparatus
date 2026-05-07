@@ -156,12 +156,16 @@ doesn't own, and `merge` fans the same event out to all of them, collecting the 
 result.
 
 ```scala mdoc:silent
-val flight: FSM[Id, SagaEvent[String], List[String]] = ??? // defined above
-val car:    FSM[Id, SagaEvent[String], List[String]] = ???
-val hotel:  FSM[Id, SagaEvent[String], List[String]] = ???
+val hotelMachine: FSM[Id, SagaEvent[String], List[String]] =
+  FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("hotel-ack")))
+    .lmapOrEmpty { case SagaEvent.StepStarted("hotel") => "hotel" }
+
+val carMachine: FSM[Id, SagaEvent[String], List[String]] =
+  FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("car-ack")))
+    .lmapOrEmpty { case SagaEvent.StepStarted("car") => "car" }
 
 val services: FSM[Id, SagaEvent[String], List[String]] =
-  flight merge car merge hotel
+  flightMachine.merge(carMachine.merge(hotelMachine))
 ```
 
 ## Input / Output adapters
