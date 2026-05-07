@@ -1,6 +1,6 @@
 package apparatus.core
 
-import cats.{Applicative, Foldable, Functor, Monad, Monoid, ~>}
+import cats.*
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
 
@@ -20,12 +20,14 @@ import cats.implicits.*
   * @tparam I input type
   * @tparam O output type
   */
-sealed trait FSM[F[_], I, O]:
+sealed trait FSM[F[_], I, O] { outer =>
+
   /** Advance the machine by one input, returning output and the updated machine. */
   def runWith(input: I)(using Monad[F]): F[(O, FSM[F, I, O])]
 
   /** Transform the effect type via a natural transformation. */
   def mapK[G[_]](f: F ~> G): FSM[G, I, O]
+}
 
 extension [F[_], A, B](left: FSM[F, A, B]) {
 
@@ -92,6 +94,18 @@ extension [F[_], A, B](left: FSM[F, A, B]) {
   /** Route `Right` to this machine; forward `Left` unchanged. */
   def right[C, D](using A: Applicative[F]): FSM[F, Either[C, A], Either[C, B]] =
     FSM.Alternative(FSM.identity, left)
+
+  /** Map input via a partial function; returns [[Monoid.empty]] for the output (without
+   * advancing state) when the function is undefined for the given input.
+   */
+  def lmapOrEmpty[C](pf: PartialFunction[C, A])(using m: Monoid[B]): FSM[F, C, B] =
+    FSM.LmapOrEmpty(left, pf, m)
+
+  /** Run both machines on the same input and combine their outputs via [[Monoid]].
+   * Both machines advance their state independently on every step.
+   */
+  def merge(right: FSM[F, A, B])(using m: Monoid[B]): FSM[F, A, B] =
+    FSM.Merged(left, right, m)
 }
 
 extension [F[_], M[_], A, B](left: FSM[F, A, M[B]]) {
@@ -167,6 +181,27 @@ object FSM:
             yield result
       loop(left, right, List(a), monoidNB.empty)
     def mapK[G[_]](f: F ~> G): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
+
+  /** Routes input via a partial function; returns [[Monoid.empty]] without advancing state
+    * when the function is undefined for the given input.
+    */
+  case class LmapOrEmpty[F[_], A, B, C](inner: FSM[F, A, B], pf: PartialFunction[C, A], mb: Monoid[B]) extends FSM[F, C, B]:
+    def runWith(input: C)(using Monad[F]): F[(B, FSM[F, C, B])] =
+      pf.lift(input) match
+        case Some(a) => inner.runWith(a).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
+        case None    => (mb.empty, this).pure[F]
+    def mapK[G[_]](f: F ~> G): FSM[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
+
+  /** Runs both machines on the same input; outputs are combined via [[Monoid]].
+    * Both machines advance state independently on every step.
+    */
+  case class Merged[F[_], A, B](left: FSM[F, A, B], right: FSM[F, A, B], mb: Monoid[B]) extends FSM[F, A, B]:
+    def runWith(input: A)(using Monad[F]): F[(B, FSM[F, A, B])] =
+      for
+        (b1, l2) <- run(left, input)
+        (b2, r2) <- run(right, input)
+      yield (mb.combine(b1, b2), Merged(l2, r2, mb))
+    def mapK[G[_]](f: F ~> G): FSM[G, A, B] = Merged(left.mapK(f), right.mapK(f), mb)
 
   /** Stateless identity machine: passes every input through unchanged. */
   def identity[F[_] : Applicative, A]: FSM[F, A, A] =
