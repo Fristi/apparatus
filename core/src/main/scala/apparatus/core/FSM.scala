@@ -114,6 +114,14 @@ extension [F[_], M[_], A, B](left: FSM[F, A, M[B]]) {
 
   def <->(right: FSM[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): FSM[F, A, M[B]] =
     feedback(right)
+
+  /** Like [[feedback]] but the entry point accepts `M[A]` (a collection) rather than a single `A`.
+    *
+    * Use when composing a sub-machine (whose output is already `M[A]`) with a feedback reactor,
+    * or after rerooting a [[FSM.Feedback]] node.
+    */
+  def feedbackMany(right: FSM[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): FSM[F, M[A], M[B]] =
+    FSM.FeedbackMany(left, right)
 }
 
 object FSM:
@@ -181,6 +189,32 @@ object FSM:
             yield result
       loop(left, right, List(a), monoidNB.empty)
     def mapK[G[_]](f: F ~> G): FSM[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
+
+  /** Like [[Feedback]] but accepts `N[A]` (a collection) as the initial input instead of
+    * a single `A`. All elements are processed through the same feedback loop in order.
+    *
+    * Typical use: after rerooting a [[Feedback]] node, or when composing a sub-machine
+    * whose output is already `N[A]` (e.g. via `>>>`) with a feedback reactor.
+    *
+    * @tparam N container with `Foldable` and `Monoid` (e.g. `List`)
+    */
+  case class FeedbackMany[F[_], A, B, N[_]](left: FSM[F, A, N[B]], right: FSM[F, B, N[A]])(
+    using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]
+  ) extends FSM[F, N[A], N[B]]:
+    def runWith(nas: N[A])(using Monad[F]): F[(N[B], FSM[F, N[A], N[B]])] =
+      def loop(lf: FSM[F, A, N[B]], rf: FSM[F, B, N[A]], pending: List[A], acc: N[B]): F[(N[B], FSM[F, N[A], N[B]])] =
+        pending match
+          case Nil => (acc, FeedbackMany(lf, rf)).pure[F]
+          case head :: tail =>
+            for
+              (nb, lf2) <- run(lf, head)
+              (na, rf2) <- foldN.toList(nb).foldLeftM((monoidNA.empty, rf)):
+                             case ((naAcc, rf0), b) =>
+                               run(rf0, b).map { case (na2, rf1) => (monoidNA.combine(naAcc, na2), rf1) }
+              result    <- loop(lf2, rf2, foldN.toList(na) ++ tail, monoidNB.combine(acc, nb))
+            yield result
+      loop(left, right, foldN.toList(nas), monoidNB.empty)
+    def mapK[G[_]](f: F ~> G): FSM[G, N[A], N[B]] = FeedbackMany(left.mapK(f), right.mapK(f))
 
   /** Routes input via a partial function; returns [[Monoid.empty]] without advancing state
     * when the function is undefined for the given input.
