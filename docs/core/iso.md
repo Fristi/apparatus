@@ -23,7 +23,7 @@ import cats.Id
 case class Point(x: Double, y: Double)
 
 val isoPoint = summon[Iso[(Double, Double), Point]]
-// isoPoint: productIso[Point, Tuple2[Double, Double]] = apparatus.core.Iso$productIso@77799137
+// isoPoint: productIso[Point, Tuple2[Double, Double]] = apparatus.core.Iso$productIso@4b197d70
 
 isoPoint.to((1.0, 2.0))        // Point(1.0, 2.0)
 // res0: Point = Point(x = 1.0, y = 2.0)
@@ -66,7 +66,7 @@ case class Mul(n: Int) extends Op
 case object Reset      extends Op
 
 val isoOp = summon[Iso[Either[Add, Either[Mul, Reset.type]], Op]]
-// isoOp: sumIso[Op, *:[Add, *:[Mul, *:[Reset, EmptyTuple]]], Either[Add, Either[Mul, Reset]]] = apparatus.core.Iso$sumIso@13c0f179
+// isoOp: sumIso[Op, *:[Add, *:[Mul, *:[Reset, EmptyTuple]]], Either[Add, Either[Mul, Reset]]] = apparatus.core.Iso$sumIso@346ba3a9
 
 isoOp.from(Add(1))          // Left(Add(1))
 // res4: Either[Add, Either[Mul, Reset]] = Left(Add(1))
@@ -97,13 +97,13 @@ val tupleFsm: FSM[Id, (Int, Boolean), (String, Double)] =
     case (n, b) => (if b then "yes" else "no", n.toDouble)
   })
 // tupleFsm: FSM[Id, Tuple2[Int, Boolean], Tuple2[String, Double]] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@42d87a81
+//   apparatus.core.BaseMachineT$$anon$3@604fdc8a
 // )
 
 // Lift to case-class I/O with imap
 val adtFsm: FSM[Id, In, Out] = tupleFsm.imap
 // adtFsm: FSM[Id, In, Out] = Basic(
-//   apparatus.core.BaseMachineT$$anon$2@1c57e336
+//   apparatus.core.BaseMachineT$$anon$2@43c964d1
 // )
 
 val (out, _) = FSM.run(adtFsm, In(42, true))
@@ -123,74 +123,74 @@ case object Zero            extends Result
 val doubleFsm: FSM[Id, Add, Doubled] =
   FSM.Basic(BaseMachineT.stateless[Id, Add, Doubled](c => Doubled(c.n * 2)))
 // doubleFsm: FSM[Id, Add, Doubled] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@6fc89391
+//   apparatus.core.BaseMachineT$$anon$3@7950bf00
 // )
 
 val negateFsm: FSM[Id, Mul, Negated] =
   FSM.Basic(BaseMachineT.stateless[Id, Mul, Negated](c => Negated(-c.n)))
 // negateFsm: FSM[Id, Mul, Negated] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@4b8d57c0
+//   apparatus.core.BaseMachineT$$anon$3@6a45ddd2
 // )
 
 val resetFsm2: FSM[Id, Reset.type, Zero.type] =
   FSM.Basic(BaseMachineT.stateless[Id, Reset.type, Zero.type](_ => Zero))
 // resetFsm2: FSM[Id, Reset, Zero] = Basic(
-//   apparatus.core.BaseMachineT$$anon$3@4178828
+//   apparatus.core.BaseMachineT$$anon$3@dc59f45
 // )
 
 // Right-group to match sumIso nesting
 val eitherFsm = doubleFsm ||| (negateFsm ||| resetFsm2)
 // eitherFsm: FSM[[A >: Nothing <: Any] =>> A, Either[Add, Either[Mul, Reset]], Either[Doubled, Either[Negated, Zero]]] = Alternative(
-//   left = Basic(apparatus.core.BaseMachineT$$anon$3@6fc89391),
+//   left = Basic(apparatus.core.BaseMachineT$$anon$3@7950bf00),
 //   right = Alternative(
-//     left = Basic(apparatus.core.BaseMachineT$$anon$3@4b8d57c0),
-//     right = Basic(apparatus.core.BaseMachineT$$anon$3@4178828)
+//     left = Basic(apparatus.core.BaseMachineT$$anon$3@6a45ddd2),
+//     right = Basic(apparatus.core.BaseMachineT$$anon$3@dc59f45)
 //   )
 // )
 
 val adtFsm2: FSM[Id, Op, Result] = eitherFsm.imap
 // adtFsm2: FSM[Id, Op, Result] = Sequential(
-//   left = Basic(apparatus.core.BaseMachineT$$anon$3@76a1ac35),
+//   left = Basic(apparatus.core.BaseMachineT$$anon$3@41ba569f),
 //   right = Sequential(
 //     left = Alternative(
-//       left = Basic(apparatus.core.BaseMachineT$$anon$3@6fc89391),
+//       left = Basic(apparatus.core.BaseMachineT$$anon$3@7950bf00),
 //       right = Alternative(
-//         left = Basic(apparatus.core.BaseMachineT$$anon$3@4b8d57c0),
-//         right = Basic(apparatus.core.BaseMachineT$$anon$3@4178828)
+//         left = Basic(apparatus.core.BaseMachineT$$anon$3@6a45ddd2),
+//         right = Basic(apparatus.core.BaseMachineT$$anon$3@dc59f45)
 //       )
 //     ),
-//     right = Basic(apparatus.core.BaseMachineT$$anon$3@72c987e7)
+//     right = Basic(apparatus.core.BaseMachineT$$anon$3@7d22654e)
 //   )
 // )
 
 val (r1, f1) = FSM.run(adtFsm2, Add(5))
 // r1: Result = Doubled(10)
 // f1: FSM[[A >: Nothing <: Any] =>> A, Op, Result] = Sequential(
-//   left = Basic(apparatus.core.BaseMachineT$$anon$3@60e8e440),
+//   left = Basic(apparatus.core.BaseMachineT$$anon$3@52ad812a),
 //   right = Sequential(
 //     left = Alternative(
-//       left = Basic(apparatus.core.BaseMachineT$$anon$3@4be1c315),
+//       left = Basic(apparatus.core.BaseMachineT$$anon$3@47fa8d40),
 //       right = Alternative(
-//         left = Basic(apparatus.core.BaseMachineT$$anon$3@4b8d57c0),
-//         right = Basic(apparatus.core.BaseMachineT$$anon$3@4178828)
+//         left = Basic(apparatus.core.BaseMachineT$$anon$3@6a45ddd2),
+//         right = Basic(apparatus.core.BaseMachineT$$anon$3@dc59f45)
 //       )
 //     ),
-//     right = Basic(apparatus.core.BaseMachineT$$anon$3@451c5d08)
+//     right = Basic(apparatus.core.BaseMachineT$$anon$3@2cf6291a)
 //   )
 // )
 val (r2, f2) = FSM.run(f1,      Mul(3))
 // r2: Result = Negated(-3)
 // f2: FSM[[A >: Nothing <: Any] =>> A, Op, Result] = Sequential(
-//   left = Basic(apparatus.core.BaseMachineT$$anon$3@722d3492),
+//   left = Basic(apparatus.core.BaseMachineT$$anon$3@29b8f050),
 //   right = Sequential(
 //     left = Alternative(
-//       left = Basic(apparatus.core.BaseMachineT$$anon$3@4be1c315),
+//       left = Basic(apparatus.core.BaseMachineT$$anon$3@47fa8d40),
 //       right = Alternative(
-//         left = Basic(apparatus.core.BaseMachineT$$anon$3@3e36eadf),
-//         right = Basic(apparatus.core.BaseMachineT$$anon$3@4178828)
+//         left = Basic(apparatus.core.BaseMachineT$$anon$3@26c36744),
+//         right = Basic(apparatus.core.BaseMachineT$$anon$3@dc59f45)
 //       )
 //     ),
-//     right = Basic(apparatus.core.BaseMachineT$$anon$3@3c4cb260)
+//     right = Basic(apparatus.core.BaseMachineT$$anon$3@4479f3ca)
 //   )
 // )
 val (r3, _)  = FSM.run(f2,      Reset)
