@@ -22,12 +22,12 @@ case class Out(a: Boolean, b: Double)
 
 // --- fixtures ---
 
-val incFsm:   FSM[Id, Inc,   Incremented] = FSM.Basic(BaseMachineT.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
-val decFsm:   FSM[Id, Dec,   Decremented] = FSM.Basic(BaseMachineT.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
-val resetFsm: FSM[Id, Reset, WasReset]    = FSM.Basic(BaseMachineT.stateless[Id, Reset, WasReset](_ => WasReset()))
+val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.Basic(BaseMachineT.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
+val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.Basic(BaseMachineT.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
+val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.Basic(BaseMachineT.stateless[Id, Reset, WasReset](_ => WasReset()))
 
-val boolFsm: FSM[Id, Int,    Boolean] = FSM.Basic(BaseMachineT.stateless[Id, Int,    Boolean](n => n > 0))
-val strFsm:  FSM[Id, String, Double]  = FSM.Basic(BaseMachineT.stateless[Id, String, Double](_.toDouble))
+val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.Basic(BaseMachineT.stateless[Id, Int,    Boolean](n => n > 0))
+val strFsm:  Apparatus[Id, String, Double]  = Apparatus.Basic(BaseMachineT.stateless[Id, String, Double](_.toDouble))
 
 // --- tests ---
 
@@ -63,41 +63,41 @@ class IsoSpec extends munit.FunSuite:
     val iso = summon[Iso[(Int, String), In]]
     assertEquals(iso.from(iso.to((42, "x"))), (42, "x"))
 
-  // ---- FSM.imap: coproduct ----
+  // ---- Apparatus.imap: coproduct ----
   //
   // ||| is left-associative: a ||| b ||| c = (a ||| b) ||| c  (left-nested)
   // sumIso uses right-nesting: Either[A, Either[B, C]]
   // Use explicit right grouping:  a ||| (b ||| c)
 
-  test("imap lifts right-nested Either FSM to sealed-trait Cmd/Evt"):
-    val adtFsm: FSM[Id, Cmd, Evt] = (incFsm ||| (decFsm ||| resetFsm)).imap
+  test("imap lifts right-nested Either Apparatus to sealed-trait Cmd/Evt"):
+    val adtFsm: Apparatus[Id, Cmd, Evt] = (incFsm ||| (decFsm ||| resetFsm)).imap
 
-    val (e1, f1) = FSM.run(adtFsm, Inc(10))
+    val (e1, f1) = Apparatus.run(adtFsm, Inc(10))
     assertEquals(e1, Incremented(10))
-    val (e2, f2) = FSM.run(f1, Dec(3))
+    val (e2, f2) = Apparatus.run(f1, Dec(3))
     assertEquals(e2, Decremented(3))
-    val (e3, _)  = FSM.run(f2, Reset())
+    val (e3, _)  = Apparatus.run(f2, Reset())
     assertEquals(e3, WasReset())
 
-  // ---- FSM.imap: product ----
+  // ---- Apparatus.imap: product ----
 
-  test("imap lifts tuple FSM to case-class In/Out"):
-    val adtFsm: FSM[Id, In, Out] = (boolFsm *** strFsm).imap
+  test("imap lifts tuple Apparatus to case-class In/Out"):
+    val adtFsm: Apparatus[Id, In, Out] = (boolFsm *** strFsm).imap
 
-    val (out, _) = FSM.run(adtFsm, In(5, "3.14"))
+    val (out, _) = Apparatus.run(adtFsm, In(5, "3.14"))
     assertEquals(out, Out(true, 3.14))
 
   // ---- imap preserves internal state ----
 
   test("imap preserves state across steps"):
-    val accumFsm: FSM[Id, Inc, Incremented] =
-      FSM.Basic(BaseMachineT[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
+    val accumFsm: Apparatus[Id, Inc, Incremented] =
+      Apparatus.Basic(BaseMachineT[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
 
-    val adtFsm: FSM[Id, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
+    val adtFsm: Apparatus[Id, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
 
-    val (e1, f1) = FSM.run(adtFsm, Inc(3))
+    val (e1, f1) = Apparatus.run(adtFsm, Inc(3))
     assertEquals(e1, Incremented(3))
-    val (e2, f2) = FSM.run(f1, Inc(4))
+    val (e2, f2) = Apparatus.run(f1, Inc(4))
     assertEquals(e2, Incremented(7))
-    val (e3, _)  = FSM.run(f2, Reset())
+    val (e3, _)  = Apparatus.run(f2, Reset())
     assertEquals(e3, WasReset())

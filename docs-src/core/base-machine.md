@@ -75,12 +75,12 @@ val safe: BaseMachineT[Fallible, String, Double] =
   }
 ```
 
-## Wrapping in FSM
+## Wrapping in Apparatus
 
-`BaseMachineT` becomes composable once wrapped in `FSM.Basic`:
+`BaseMachineT` becomes composable once wrapped in `Apparatus.Basic`:
 
 ```scala mdoc:silent
-val fsmCounter: FSM[Id, Int, Int] = FSM.Basic(counter)
+val fsmCounter: Apparatus[Id, Int, Int] = Apparatus.Basic(counter)
 ```
 
-See [FSM](fsm.md) for how to compose machines with `>>>`, `***`, `|||`, and `<->`.
+See [Apparatus](apparatus.md) for how to compose machines with `>>>`, `***`, `|||`, and `<->`.

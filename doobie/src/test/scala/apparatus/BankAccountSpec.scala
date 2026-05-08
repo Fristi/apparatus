@@ -46,7 +46,7 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
 
   // Run one command against a fresh aggregate id, returning the events produced.
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] =
-    bankAccount.transactionalDecider(id).flatMap(x => FSM.runA(x.tap(transactionsProjection(id, DoobieBankAccountTransactionRepository)), cmd)).transact(xa)
+    bankAccount.transactionalDecider(id).flatMap(x => Apparatus.runA(x.tap(transactionsProjection(id, DoobieBankAccountTransactionRepository)), cmd)).transact(xa)
 
   test("open account emits Opened") {
     withContainers { c =>

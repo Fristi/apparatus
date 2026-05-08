@@ -22,14 +22,14 @@ trait EventStore[F[_], O]:
 
 
 extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
-  /** Build a transactional [[FSM]] for aggregate `id`.
+  /** Build a transactional [[Apparatus]] for aggregate `id`.
     *
     * Within a single `ConnectionIO` transaction this will:
     *   1. Acquire an advisory lock on `id` (raises on failure).
     *   2. Load and replay the existing event stream to restore state.
-    *   3. Return a [[FSM.Basic]] whose `action` decides, appends, and evolves atomically.
+    *   3. Return a [[Apparatus.Basic]] whose `action` decides, appends, and evolves atomically.
     */
-  def transactionalDecider(id: UUID): ConnectionIO[FSM[ConnectionIO, I, List[O]]] =
+  def transactionalDecider(id: UUID): ConnectionIO[Apparatus[ConnectionIO, I, List[O]]] =
     for {
       store = PostgresEventStore[O]()
       acquired <- store.lockAggregate(id)
@@ -49,6 +49,6 @@ extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
           store.appendAggregateStream(id, eventStreamToAppend).map(_ => (o, ns))
       }
 
-      FSM.Basic(baseMachineT)
+      Apparatus.Basic(baseMachineT)
     }
 }
