@@ -85,8 +85,8 @@ val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountE
     .decide[BankAccountCommand, List[BankAccountEvent]](_.decide(_))
     .evolveList(_.evolve(_))
 
-def transactionsProjection(id: UUID, repo: BankAccountTransactionRepository[ConnectionIO]): FSM[ConnectionIO, List[BankAccountEvent], Int] = 
-  FSM.Basic(BaseMachineT.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs => 
+def transactionsProjection(id: UUID, repo: BankAccountTransactionRepository[ConnectionIO]): Apparatus[ConnectionIO, List[BankAccountEvent], Int] = 
+  Apparatus.Basic(BaseMachineT.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs => 
     evs.traverse {
       case BankAccountEvent.Deposited(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Deposit, amount, at))
       case BankAccountEvent.Withdrawn(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Withdrawal, amount, at))

@@ -2,7 +2,7 @@
 
 ![logo](/docs/public/logo.jpg)
 
-Scala library to create and compose basic, eventful and network finite state machines (FSM).
+Scala library to create and compose basic, eventful and network finite state machines (Apparatus).
 
 Three building blocks
 

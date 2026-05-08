@@ -86,11 +86,11 @@ enum SagaEvent[Step]:
   *   - [[stepHandler]] — translates incoming commands to `(Step, SagaStepResult)` during a forward run
   *   - [[compensationHandler]] — translates incoming commands to `(Step, SagaStepResult)` during compensation
   *
-  * Lift a concrete behavior into an FSM via [[decider]]:
+  * Lift a concrete behavior into an Apparatus via [[decider]]:
   *
   * {{{
-  * val fsm: FSM[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-  *   FSM.Basic(behavior.decider.toBaseMachine)
+  * val fsm: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
+  *   Apparatus.Basic(behavior.decider.toBaseMachine)
   * }}}
   *
   * @tparam Cmd  the command type
@@ -222,7 +222,7 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
 
   /** Builds a [[Decider]] that wraps [[decide]] and [[evolve]], seeded at [[SagaState.Waiting]].
     *
-    * Lift it into an FSM with `behavior.decider.toBaseMachine`.
+    * Lift it into an Apparatus with `behavior.decider.toBaseMachine`.
     */
   def decider: Decider[SagaState[Step], Cmd, List[SagaEvent[Step]]] =
     DeciderBuilder.seed[SagaState[Step]](SagaState.Waiting())

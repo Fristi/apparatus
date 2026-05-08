@@ -71,9 +71,9 @@ isoOp.to(Right(Left(Mul(3))))  // Mul(3)
 
 ---
 
-## FSM.imap — lifting machines to ADTs
+## Apparatus.imap — lifting machines to ADTs
 
-`FSM.imap` uses `Iso` to adapt a machine's input and output simultaneously. It requires two `Iso`
+`Apparatus.imap` uses `Iso` to adapt a machine's input and output simultaneously. It requires two `Iso`
 instances to be in scope: one for the input type and one for the output type.
 
 ### Product example
@@ -82,15 +82,15 @@ instances to be in scope: one for the input type and one for the output type.
 case class In(x: Int, flag: Boolean)
 case class Out(label: String, value: Double)
 
-val tupleFsm: FSM[Id, (Int, Boolean), (String, Double)] =
-  FSM.Basic(BaseMachineT.stateless[Id, (Int, Boolean), (String, Double)] {
+val tupleFsm: Apparatus[Id, (Int, Boolean), (String, Double)] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, (Int, Boolean), (String, Double)] {
     case (n, b) => (if b then "yes" else "no", n.toDouble)
   })
 
 // Lift to case-class I/O with imap
-val adtFsm: FSM[Id, In, Out] = tupleFsm.imap
+val adtFsm: Apparatus[Id, In, Out] = tupleFsm.imap
 
-val (out, _) = FSM.run(adtFsm, In(42, true))
+val (out, _) = Apparatus.run(adtFsm, In(42, true))
 ```
 
 ### Coproduct example
@@ -103,23 +103,23 @@ case class Doubled(n: Int)  extends Result
 case class Negated(n: Int)  extends Result
 case object Zero            extends Result
 
-val doubleFsm: FSM[Id, Add, Doubled] =
-  FSM.Basic(BaseMachineT.stateless[Id, Add, Doubled](c => Doubled(c.n * 2)))
+val doubleFsm: Apparatus[Id, Add, Doubled] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, Add, Doubled](c => Doubled(c.n * 2)))
 
-val negateFsm: FSM[Id, Mul, Negated] =
-  FSM.Basic(BaseMachineT.stateless[Id, Mul, Negated](c => Negated(-c.n)))
+val negateFsm: Apparatus[Id, Mul, Negated] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, Mul, Negated](c => Negated(-c.n)))
 
-val resetFsm2: FSM[Id, Reset.type, Zero.type] =
-  FSM.Basic(BaseMachineT.stateless[Id, Reset.type, Zero.type](_ => Zero))
+val resetFsm2: Apparatus[Id, Reset.type, Zero.type] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, Reset.type, Zero.type](_ => Zero))
 
 // Right-group to match sumIso nesting
 val eitherFsm = doubleFsm ||| (negateFsm ||| resetFsm2)
 
-val adtFsm2: FSM[Id, Op, Result] = eitherFsm.imap
+val adtFsm2: Apparatus[Id, Op, Result] = eitherFsm.imap
 
-val (r1, f1) = FSM.run(adtFsm2, Add(5))
-val (r2, f2) = FSM.run(f1,      Mul(3))
-val (r3, _)  = FSM.run(f2,      Reset)
+val (r1, f1) = Apparatus.run(adtFsm2, Add(5))
+val (r2, f2) = Apparatus.run(f1,      Mul(3))
+val (r3, _)  = Apparatus.run(f2,      Reset)
 ```
 
 ---

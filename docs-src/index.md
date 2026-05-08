@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Apparatus"
-  text: "Composable FSM forests"
-  tagline: General purpose FSM forests via (non) persistent FSM
+  text: "Composable Apparatus forests"
+  tagline: General purpose Apparatus forests via (non) persistent Apparatus
   image:
     src: "/logo.jpg"
     alt: Apparatus
@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: General purpose
-    details: Can be used for (non) persistent FSM in stream processing or concurrent programming
+    details: Can be used for (non) persistent Apparatus in stream processing or concurrent programming
   - title: Event sourcing
     details: Define aggregates with `Decider` and project the output read-models with ease
   - title: Sagas

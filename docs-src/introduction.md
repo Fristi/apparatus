@@ -18,17 +18,17 @@ Apparatus gives that logic a home.
 - **Pure functions, no magic.** `decide` and `evolve` are plain functions. No framework
   annotations, no reflection, no runtime agents. You can call them in a unit test with zero setup.
 - **Composable by construction.** Small machines combine into larger ones via a small set of
-  algebraic combinators (`>>>`, `<->`, `merge`, …). The resulting network is still just an `FSM`
+  algebraic combinators (`>>>`, `<->`, `merge`, …). The resulting network is still just an `Apparatus`
   — it has the same interface and can be composed further.
 
 ## Three building blocks
 
-### Basic FSM
+### Basic Apparatus
 
 Receives input and evolves internal state, emitting output. The minimal unit of computation.
 Useful for simple lifecycle objects, counters, or as building blocks for larger networks.
 
-### Eventful FSM — the Decider pattern
+### Eventful Apparatus — the Decider pattern
 
 Separates command handling into two pure functions:
 
@@ -44,7 +44,7 @@ Command ──► decide(cmd, state) ──► [Event, …]
 event-log replay. This strict separation makes both functions trivially testable and makes the
 aggregate fully reconstructable from its event history.
 
-### Networked FSM
+### Networked Apparatus
 
 Basic and eventful machines compose into networks. Two important patterns:
 
@@ -93,7 +93,7 @@ responsibility (e.g., via event sourcing with doobie, Skunk, or Slick). What App
 is the **pure decision and evolution logic** that you compose into your persistence layer.
 
 The sweet spot for Apparatus is inside a single microservice where you want transactional
-consistency (one database transaction = one FSM step) and you own the persistence. Temporal is
+consistency (one database transaction = one Apparatus step) and you own the persistence. Temporal is
 the better choice when workflows must survive process crashes, span multiple services, or require
 Temporal's built-in retry/timeout infrastructure.
 

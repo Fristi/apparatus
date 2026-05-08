@@ -68,11 +68,11 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
       (res, res)
   )
 
-def freshNetwork: FSM[Id, DoorCommand, DoorStats] =
-  FSM.Sequential(FSM.Basic(door.toBaseMachine[Id]), FSM.Basic(doorProject))
+def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
+  Apparatus.Sequential(Apparatus.Basic(door.toBaseMachine[Id]), Apparatus.Basic(doorProject))
 
-def runAll[O : Monoid](fsm: FSM[Id, DoorCommand, O], cmds: DoorCommand*): (O, FSM[Id, DoorCommand, O]) =
-  FSM.runMultiple(fsm, cmds)
+def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): (O, Apparatus[Id, DoorCommand, O]) =
+  Apparatus.runMultiple(fsm, cmds)
 
 // --- Tests ---
 
@@ -98,12 +98,12 @@ class DoorSpec extends munit.FunSuite:
     val evts = door.decide(DoorCommand.Close, DoorState.Closed(1))
     assertEquals(evts, Nil)
 
-  test("three knocks open the door via FSM network"):
+  test("three knocks open the door via Apparatus network"):
     val (stats, _) = runAll(freshNetwork, DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock)
     assertEquals(stats.opened, 1)
     assertEquals(stats.closed, 0)
 
-  test("open then close via FSM network"):
+  test("open then close via Apparatus network"):
     val (stats, _) = runAll(
       freshNetwork,
       DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock,

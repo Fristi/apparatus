@@ -1,6 +1,6 @@
 # Getting started
 
-This guide walks from zero to a working networked FSM. It uses a door that opens after three
+This guide walks from zero to a working networked Apparatus. It uses a door that opens after three
 knocks and can be closed again.
 
 ```scala mdoc
@@ -76,7 +76,7 @@ val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
 
 ## 3. Test in isolation
 
-Because `decide` and `evolve` are plain functions you can call them directly — no FSM, no effect
+Because `decide` and `evolve` are plain functions you can call them directly — no Apparatus, no effect
 stack, no test kit.
 
 ```scala mdoc
@@ -90,22 +90,22 @@ assert(door.evolve(List(DoorEvent.Knocked), DoorState.Closed(1)) == DoorState.Cl
 assert(door.evolve(List(DoorEvent.Opened),  DoorState.Closed(2)) == DoorState.Open)
 ```
 
-## 4. Lift into an FSM
+## 4. Lift into an Apparatus
 
 `toBaseMachine[F]` turns the `Decider` into a `BaseMachineT` running in effect `F`.
-Wrap it in `FSM.Basic` to get a composable machine.
+Wrap it in `Apparatus.Basic` to get a composable machine.
 
 ```scala mdoc
-val doorFsm: FSM[Id, DoorCommand, List[DoorEvent]] =
-  FSM.Basic(door.toBaseMachine[Id])
+val doorFsm: Apparatus[Id, DoorCommand, List[DoorEvent]] =
+  Apparatus.Basic(door.toBaseMachine[Id])
 
-val (events, nextFsm) = FSM.run(doorFsm, DoorCommand.Knock)
+val (events, nextFsm) = Apparatus.run(doorFsm, DoorCommand.Knock)
 ```
 
-Use `FSM.runMultiple` to feed multiple commands, accumulating outputs via `Monoid`:
+Use `Apparatus.runMultiple` to feed multiple commands, accumulating outputs via `Monoid`:
 
 ```scala mdoc
-val (allEvents, _) = FSM.runMultiple(doorFsm, List(
+val (allEvents, _) = Apparatus.runMultiple(doorFsm, List(
   DoorCommand.Knock,
   DoorCommand.Knock,
   DoorCommand.Knock,  // third knock opens the door
@@ -133,13 +133,13 @@ val projection: BaseMachineT[Id, List[DoorEvent], DoorStats] =
       (next, next)
   )
 
-val network: FSM[Id, DoorCommand, DoorStats] =
-  FSM.Basic(door.toBaseMachine[Id]) >>> FSM.Basic(projection)
+val network: Apparatus[Id, DoorCommand, DoorStats] =
+  Apparatus.Basic(door.toBaseMachine[Id]) >>> Apparatus.Basic(projection)
 
 given cats.kernel.Monoid[DoorStats] =
   cats.kernel.Monoid.instance(DoorStats(0, 0), (a, b) => DoorStats(a.opened max b.opened, a.closed max b.closed))
 
-val (stats, _) = FSM.runMultiple(network, List(
+val (stats, _) = Apparatus.runMultiple(network, List(
   DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock, // open
   DoorCommand.Close,                                        // close
   DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock, // open again
@@ -159,11 +159,11 @@ import cats.~>
 val liftToIO: Id ~> IO = new (Id ~> IO):
   def apply[A](a: A): IO[A] = IO.pure(a)
 
-val networkIO: FSM[IO, DoorCommand, DoorStats] = network.mapK(liftToIO)
+val networkIO: Apparatus[IO, DoorCommand, DoorStats] = network.mapK(liftToIO)
 ```
 
 ## Next steps
 
 - [Decider](decider.md) — full reference for the Decider pattern and event sourcing
-- [FSM](fsm.md) — all combinators: `>>>`, `<->`, `merge`, `lmapOrEmpty`, `par`, `|||`
+- [Apparatus](apparatus.md) — all combinators: `>>>`, `<->`, `merge`, `lmapOrEmpty`, `par`, `|||`
 - [Saga](saga.md) — orchestrating multi-step distributed transactions with rollback

@@ -7,7 +7,7 @@ To implement this with Apparatus, you need these things:
 
 - `SagaBehavior` — a trait you implement to describe your saga's steps and how incoming commands map
   to step results. The step results are used to have the saga `decide` what _events_ to emit, and based on th events how to `evolve` the internal state of orchestrator. This is a opinionated `Decider` which can be made persistent.
-- `FSM.Feedback` (`<->`) — the combinator that closes the loop between the saga orchestrator and
+- `Apparatus.Feedback` (`<->`) — the combinator that closes the loop between the saga orchestrator and
   the service machines it drives.
 
 ```scala
@@ -101,7 +101,7 @@ val behavior = new SagaBehavior[BookingCommand, BookingStep]:
 ```
 
 `behavior.decider` gives you a `Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]]`
-ready to lift into an FSM network.
+ready to lift into an Apparatus network.
 
 ## Wiring up service machines
 
@@ -114,8 +114,8 @@ Each service machine:
 ```scala
 def flightServiceFSM(
   flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider()
-): FSM[Id, SagaEvent[BookingStep], List[BookingCommand]] =
-  FSM.Basic(flight.toBaseMachine[Id])
+): Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
+  Apparatus.Basic(flight.toBaseMachine[Id])
     .lmapOrEmpty[SagaEvent[BookingStep]] {
       case SagaEvent.Booted(BookingStep.Flight, _)                | SagaEvent.StepStarted(BookingStep.Flight)         => FlightCommand.Reserve
       case SagaEvent.CompensationTriggered(BookingStep.Flight, _) | SagaEvent.CompensationStarted(BookingStep.Flight) => FlightCommand.Compensate
@@ -130,7 +130,7 @@ def flightServiceFSM(
 Use `merge` to combine all service machines into one fan-out node:
 
 ```scala
-val services: FSM[Id, SagaEvent[BookingStep], List[BookingCommand]] =
+val services: Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
   flightServiceFSM() merge carServiceFSM() merge hotelServiceFSM()
 ```
 
@@ -156,10 +156,10 @@ BookingCommand ──► [bookingDecider: emits List[SagaEvent]]
 ```
 
 ```scala
-val bookingDecider: FSM[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-  FSM.Basic(behavior.decider.toBaseMachine)
+val bookingDecider: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
+  Apparatus.Basic(behavior.decider.toBaseMachine)
 
-def saga(...): FSM[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
+def saga(...): Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
   bookingDecider <-> services
 ```
 
@@ -167,7 +167,7 @@ Send `BookingCommand.Start` — the saga boots, drives all three services, and r
 `SagaEvent` that occurred during the full run:
 
 ```scala
-val events = FSM.runA(saga(), BookingCommand.Start)
+val events = Apparatus.runA(saga(), BookingCommand.Start)
 // List(
 //   Booted(Hotel, {Car, Flight}),
 //   StepProgressed(Hotel, Completed),
@@ -181,7 +181,7 @@ val events = FSM.runA(saga(), BookingCommand.Start)
 When a step fails, compensation fires automatically:
 
 ```scala
-val events = FSM.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
+val events = Apparatus.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
 // … StepProgressed(Flight, Failed)
 // … CompensationTriggered(Car, {Hotel})
 // … CompensationProgressed(Car, Completed)
@@ -211,10 +211,10 @@ need to resume from the *current* saga state and drive *only the remaining* serv
 `BookingCommand`. Use it when the entry point is a sub-machine whose output is already `List[_]`:
 
 ```scala
-val node: FSM[Id, List[BookingCommand], List[SagaEvent[BookingStep]]] =
+val node: Apparatus[Id, List[BookingCommand], List[SagaEvent[BookingStep]]] =
   bookingDecider.feedbackMany(services)
 
-val events = FSM.runA(node, List(BookingCommand.Start))
+val events = Apparatus.runA(node, List(BookingCommand.Start))
 ```
 
 ### Rerooting at a service machine
@@ -235,11 +235,11 @@ def sagaRerootedAtCar(
   car:          Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
   hotel:        Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider(),
   bookingEvents: List[SagaEvent[BookingStep]]
-): FSM[Id, CarCommand, List[SagaEvent[BookingStep]]] =
+): Apparatus[Id, CarCommand, List[SagaEvent[BookingStep]]] =
 
   // Car service as the entry point: CarCommand → List[BookingCommand]
-  val carCore: FSM[Id, CarCommand, List[BookingCommand]] =
-    FSM.Basic(car.toBaseMachine[Id])
+  val carCore: Apparatus[Id, CarCommand, List[BookingCommand]] =
+    Apparatus.Basic(car.toBaseMachine[Id])
       .rmap(_.collect {
         case CarEvent.Reserved    => BookingCommand.MarkCarComplete
         case CarEvent.Failed      => BookingCommand.MarkCarFailed
@@ -247,8 +247,8 @@ def sagaRerootedAtCar(
       })
 
   // Saga orchestrator rehydrated
-  val bookingDeciderAtCar: FSM[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-    FSM.Basic(
+  val bookingDeciderAtCar: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
+    Apparatus.Basic(
       DeciderBuilder.seed(SagaState.Waiting)
         .decide[BookingCommand, List[SagaEvent[BookingStep]]]((s, i) => behavior.decide(s, i))
         .evolveList((s, e) => behavior.evolve(s, e))
@@ -265,7 +265,7 @@ orchestrator: hotel was already booked successfully (it's in `compensation`), ca
 step, flight is still to come. Now a single `CarCommand.Reserve` drives the rest of the saga:
 
 ```scala
-val events = FSM.runA(sagaRerootedAtCar(), CarCommand.Reserve)
+val events = Apparatus.runA(sagaRerootedAtCar(), CarCommand.Reserve)
 // List(
 //   StepProgressed(Car, Completed),
 //   StepStarted(Flight),
@@ -276,7 +276,7 @@ val events = FSM.runA(sagaRerootedAtCar(), CarCommand.Reserve)
 If car fails, compensation triggers for hotel only (flight was never started):
 
 ```scala
-val events = FSM.runA(
+val events = Apparatus.runA(
   sagaRerootedAtCar(
     car   = carDecider(failsOnReserve = true),
     hotel = hotelDecider(initialState = HotelState.Reserved)
@@ -306,8 +306,8 @@ Reroot whenever:
 
 ## Nested sagas
 
-Because every `FSM` has the same interface, an inner saga can be plugged in wherever a simple
-service machine would go. Replace the `carDecider` with a fully-fledged `FSM[Id, CarCommand,
+Because every `Apparatus` has the same interface, an inner saga can be plugged in wherever a simple
+service machine would go. Replace the `carDecider` with a fully-fledged `Apparatus[Id, CarCommand,
 List[CarEvent]]` built from its own `SagaBehavior`, and the outer saga sees only `CarEvent`
 values — it has no knowledge of the inner saga's steps.
 
@@ -340,4 +340,4 @@ keeps the state model comprehensible.
 | `feedbackMany` | Like `feedback` but accepts `List[Cmd]` as input; used after rerooting |
 | `lmapOrEmpty` + `merge` | Fan the same `SagaEvent` to all services; only the matching one reacts |
 | Reroot | Pre-seed the orchestrator at the current saga state; chain via `>>>` to resume mid-flight |
-| Nested sagas | Plug an inner `SagaBehavior` FSM in place of a simple service machine |
+| Nested sagas | Plug an inner `SagaBehavior` Apparatus in place of a simple service machine |

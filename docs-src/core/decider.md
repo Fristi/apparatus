@@ -64,7 +64,7 @@ val light: Decider[LightState, LightCmd, List[LightEvt]] =
 
 ## Testing decide and evolve in isolation
 
-Because both functions are pure you can call them directly without any FSM machinery:
+Because both functions are pure you can call them directly without any Apparatus machinery:
 
 ```scala mdoc
 // decide
@@ -92,11 +92,11 @@ val replayed = light.evolveFrom(history)
 `toBaseMachine[F]` converts the decider into a `BaseMachineT` running in any `Applicative` `F`:
 
 ```scala mdoc
-val lightFsm: FSM[Id, LightCmd, List[LightEvt]] =
-  FSM.Basic(light.toBaseMachine[Id])
+val lightFsm: Apparatus[Id, LightCmd, List[LightEvt]] =
+  Apparatus.Basic(light.toBaseMachine[Id])
 
-val (fsmEvts1, next) = FSM.run(lightFsm, LightCmd.TurnOn)
-val (fsmEvts2, _)    = FSM.run(next,     LightCmd.TurnOff)
+val (fsmEvts1, next) = Apparatus.run(lightFsm, LightCmd.TurnOn)
+val (fsmEvts2, _)    = Apparatus.run(next,     LightCmd.TurnOff)
 ```
 
 ## Composing with a projection
@@ -118,13 +118,13 @@ val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
       (next, next)
   )
 
-val network: FSM[Id, LightCmd, LightStats] =
-  FSM.Basic(light.toBaseMachine[Id]) >>> FSM.Basic(projection)
+val network: Apparatus[Id, LightCmd, LightStats] =
+  Apparatus.Basic(light.toBaseMachine[Id]) >>> Apparatus.Basic(projection)
 
 given cats.kernel.Monoid[LightStats] =
   cats.kernel.Monoid.instance(LightStats(0, 0), (a, b) => LightStats(a.on max b.on, a.off max b.off))
 
-val (stats, _) = FSM.runMultiple(network, List(
+val (stats, _) = Apparatus.runMultiple(network, List(
   LightCmd.TurnOn, LightCmd.TurnOff, LightCmd.TurnOn
 ))
 ```

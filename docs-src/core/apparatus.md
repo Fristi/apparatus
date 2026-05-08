@@ -1,7 +1,7 @@
-# FSM
+# Apparatus
 
-`FSM[F[_], I, O]` is a composable, immutable finite-state machine running in effect `F`. Every
-call to `runWith` returns the output **and** a new `FSM` carrying updated internal state, making
+`Apparatus[F[_], I, O]` is a composable, immutable finite-state machine running in effect `F`. Every
+call to `runWith` returns the output **and** a new `Apparatus` carrying updated internal state, making
 the whole structure purely functional and replayable.
 
 ```scala mdoc
@@ -12,7 +12,7 @@ import cats.implicits.*
 
 ## Building a machine
 
-The simplest way to get an `FSM` is to wrap a `Decider` (or any `BaseMachineT`):
+The simplest way to get an `Apparatus` is to wrap a `Decider` (or any `BaseMachineT`):
 
 ```scala mdoc
 enum DoorState { case Closed, Open }
@@ -29,18 +29,18 @@ val door: Decider[DoorState, DoorCmd, List[DoorEvt]] =
       case (DoorState.Open,   DoorEvt.Closed) => DoorState.Closed
       case (s, _)                              => s
 
-val doorFsm: FSM[Id, DoorCmd, List[DoorEvt]] =
-  FSM.Basic(door.toBaseMachine[Id])
+val doorFsm: Apparatus[Id, DoorCmd, List[DoorEvt]] =
+  Apparatus.Basic(door.toBaseMachine[Id])
 ```
 
 ## Running a machine
 
 ```scala mdoc
 // Single step — returns (output, updated machine)
-val (evts, next) = FSM.run(doorFsm, DoorCmd.Open)
+val (evts, next) = Apparatus.run(doorFsm, DoorCmd.Open)
 
 // Multiple steps — folds over a collection, combining outputs via Monoid
-val (allEvts, _) = FSM.runMultiple(doorFsm, List(DoorCmd.Open, DoorCmd.Close, DoorCmd.Open))
+val (allEvts, _) = Apparatus.runMultiple(doorFsm, List(DoorCmd.Open, DoorCmd.Close, DoorCmd.Open))
 ```
 
 `runA` / `runMultipleA` discard the updated machine when you only need the output.
@@ -56,8 +56,8 @@ A ──► [left: A→B] ──► B ──► [right: B→C] ──► C
 ```
 
 ```scala mdoc:silent
-val pipeline: FSM[Id, DoorCmd, String] =
-  doorFsm >>> FSM.Basic(BaseMachineT.stateless[Id, List[DoorEvt], String](evts => evts.mkString(",")))
+val pipeline: Apparatus[Id, DoorCmd, String] =
+  doorFsm >>> Apparatus.Basic(BaseMachineT.stateless[Id, List[DoorEvt], String](evts => evts.mkString(",")))
 ```
 
 ### Parallel — `***` / `par`
@@ -69,7 +69,7 @@ Run two independent machines on the two halves of a pair simultaneously.
 ```
 
 ```scala mdoc:silent
-val paired: FSM[Id, (DoorCmd, DoorCmd), (List[DoorEvt], List[DoorEvt])] =
+val paired: Apparatus[Id, (DoorCmd, DoorCmd), (List[DoorEvt], List[DoorEvt])] =
   doorFsm *** doorFsm
 ```
 
@@ -83,7 +83,7 @@ Right(C) ──► [right: C→D] ──► Right(D)
 ```
 
 ```scala mdoc:silent
-val router: FSM[Id, Either[DoorCmd, DoorCmd], Either[List[DoorEvt], List[DoorEvt]]] =
+val router: Apparatus[Id, Either[DoorCmd, DoorCmd], Either[List[DoorEvt], List[DoorEvt]]] =
   doorFsm ||| doorFsm
 ```
 
@@ -109,13 +109,13 @@ instances (typically `List`).
 
 ```scala mdoc:silent
 // Contrived example: bounce door commands back-and-forth
-val echo: FSM[Id, DoorEvt, List[DoorCmd]] =
-  FSM.Basic(BaseMachineT.stateless[Id, DoorEvt, List[DoorCmd]] {
+val echo: Apparatus[Id, DoorEvt, List[DoorCmd]] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, DoorEvt, List[DoorCmd]] {
     case DoorEvt.Opened => List(DoorCmd.Close)
     case DoorEvt.Closed => Nil
   })
 
-val loop: FSM[Id, DoorCmd, List[DoorEvt]] =
+val loop: Apparatus[Id, DoorCmd, List[DoorEvt]] =
   doorFsm <-> echo
 ```
 
@@ -126,7 +126,7 @@ machine's state is **not advanced** and `Monoid.empty` is returned for the outpu
 
 ```scala mdoc:silent
 // Only feed Open commands to doorFsm; ignore everything else
-val openOnly: FSM[Id, Option[DoorCmd], List[DoorEvt]] =
+val openOnly: Apparatus[Id, Option[DoorCmd], List[DoorEvt]] =
   doorFsm.lmapOrEmpty { case Some(DoorCmd.Open) => DoorCmd.Open }
 ```
 
@@ -135,8 +135,8 @@ This combinator is especially useful when multiple service machines share the sa
 
 ```scala mdoc:silent
 // Each sub-machine is silent (List.empty) for unrecognised events
-val flightMachine: FSM[Id, SagaEvent[String], List[String]] =
-  FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("flight-ack")))
+val flightMachine: Apparatus[Id, SagaEvent[String], List[String]] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("flight-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("flight") => "flight" }
 ```
 
@@ -156,15 +156,15 @@ doesn't own, and `merge` fans the same event out to all of them, collecting the 
 result.
 
 ```scala mdoc:silent
-val hotelMachine: FSM[Id, SagaEvent[String], List[String]] =
-  FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("hotel-ack")))
+val hotelMachine: Apparatus[Id, SagaEvent[String], List[String]] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("hotel-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("hotel") => "hotel" }
 
-val carMachine: FSM[Id, SagaEvent[String], List[String]] =
-  FSM.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("car-ack")))
+val carMachine: Apparatus[Id, SagaEvent[String], List[String]] =
+  Apparatus.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("car-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("car") => "car" }
 
-val services: FSM[Id, SagaEvent[String], List[String]] =
+val services: Apparatus[Id, SagaEvent[String], List[String]] =
   flightMachine.merge(carMachine.merge(hotelMachine))
 ```
 
@@ -182,7 +182,7 @@ val services: FSM[Id, SagaEvent[String], List[String]] =
 
 ## Type class instances
 
-`FSM` ships instances for the standard Cats profunctor hierarchy:
+`Apparatus` ships instances for the standard Cats profunctor hierarchy:
 
 | Instance | What it enables |
 |----------|----------------|
@@ -194,7 +194,7 @@ val services: FSM[Id, SagaEvent[String], List[String]] =
 ## Effect transformation
 
 `mapK` converts the effect type via a natural transformation `F ~> G`, letting you lift an
-`FSM[Id, I, O]` into `FSM[IO, I, O]` for production use while keeping pure `Id`-based tests:
+`Apparatus[Id, I, O]` into `Apparatus[IO, I, O]` for production use while keeping pure `Id`-based tests:
 
 ```scala mdoc:silent
 import cats.~>
@@ -203,5 +203,5 @@ import cats.effect.IO
 val liftToIO: Id ~> IO = new (Id ~> IO):
   def apply[A](a: A): IO[A] = IO.pure(a)
 
-val doorIO: FSM[IO, DoorCmd, List[DoorEvt]] = doorFsm.mapK(liftToIO)
+val doorIO: Apparatus[IO, DoorCmd, List[DoorEvt]] = doorFsm.mapK(liftToIO)
 ```
