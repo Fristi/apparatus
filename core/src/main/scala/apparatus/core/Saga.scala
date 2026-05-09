@@ -195,7 +195,6 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
         }
       case SagaState.Running(current, todo, compensation) =>
         evt match {
-          case SagaEvent.StepStarted(name) => SagaState.Running(name, todo - name, compensation)
           case SagaEvent.StepProgressed(name, result) =>
             result match {
               case SagaStepResult.Completed =>
@@ -207,7 +206,6 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
         }
       case SagaState.Compensating(current, todo) =>
         evt match {
-          case SagaEvent.CompensationStarted(name) => SagaState.Compensating(name, todo - name)
           case SagaEvent.CompensationProgressed(name, result) =>
             result match {
               case SagaStepResult.Completed =>

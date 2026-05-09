@@ -23,9 +23,7 @@ lazy val core = (project in file("core"))
     name := "apparatus-core",
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-core"         % "2.13.0",
-      "dev.zio"       %% "zio-blocks-schema" % "0.0.33",
-      "org.typelevel" %% "kittens"   % "3.5.0" % Test,
-      "org.scalameta" %% "munit"             % "1.3.0" % Test
+      "dev.zio"       %% "zio-blocks-schema" % "0.0.33"
     )
   )
 
@@ -34,18 +32,40 @@ lazy val doobie = (project in file("doobie"))
   .settings(
     name := "apparatus-doobie",
     libraryDependencies ++= Seq(
-      "org.tpolecat" %% "doobie-postgres"                 % "1.0.0-RC12",
-      "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.44.1" % Test,
-      "com.dimafeng" %% "testcontainers-scala-munit"      % "0.44.1" % Test,
-      "org.typelevel" %% "munit-cats-effect"              % "2.0.0"  % Test
+      "org.tpolecat" %% "doobie-postgres" % "1.0.0-RC12"
     )
   )
   .dependsOn(core)
 
+lazy val examples = (project in file("examples"))
+  .settings(commonSettings)
+  .settings(
+    name           := "apparatus-examples",
+    publish / skip := true,
+    libraryDependencies ++= Seq(
+      "org.typelevel" %% "kittens" % "3.5.0"
+    )
+  )
+  .dependsOn(core, doobie)
+
+lazy val tests = (project in file("tests"))
+  .settings(commonSettings)
+  .settings(
+    name           := "apparatus-tests",
+    publish / skip := true,
+    libraryDependencies ++= Seq(
+      "org.scalameta" %% "munit"                           % "1.3.0"  % Test,
+      "com.dimafeng"  %% "testcontainers-scala-postgresql" % "0.44.1" % Test,
+      "com.dimafeng"  %% "testcontainers-scala-munit"      % "0.44.1" % Test,
+      "org.typelevel" %% "munit-cats-effect"               % "2.0.0"  % Test
+    )
+  )
+  .dependsOn(examples % Test, doobie % Test)
+
 lazy val docs = project
   .in(file("docs"))
   .enablePlugins(MdocPlugin)
-  .dependsOn(core, doobie)
+  .dependsOn(core, doobie, examples)
   .settings(commonSettings)
   .settings(
     publish / skip := true,
@@ -55,7 +75,7 @@ lazy val docs = project
   )
 
 lazy val root = (project in file("."))
-  .aggregate(core, doobie)
+  .aggregate(core, doobie, examples, tests)
   .settings(
     publish / skip := true
   )

@@ -1,5 +1,6 @@
-package apparatus.core
+package apparatus.tests
 
+import apparatus.core.*
 import cats.Id
 import cats.implicits.*
 
@@ -64,10 +65,6 @@ class IsoSpec extends munit.FunSuite:
     assertEquals(iso.from(iso.to((42, "x"))), (42, "x"))
 
   // ---- Apparatus.imap: coproduct ----
-  //
-  // ||| is left-associative: a ||| b ||| c = (a ||| b) ||| c  (left-nested)
-  // sumIso uses right-nesting: Either[A, Either[B, C]]
-  // Use explicit right grouping:  a ||| (b ||| c)
 
   test("imap lifts right-nested Either Apparatus to sealed-trait Cmd/Evt"):
     val adtFsm: Apparatus[Id, Cmd, Evt] = (incFsm ||| (decFsm ||| resetFsm)).imap

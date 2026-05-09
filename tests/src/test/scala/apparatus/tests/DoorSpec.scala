@@ -1,5 +1,6 @@
-package apparatus.core
+package apparatus.tests
 
+import apparatus.core.*
 import cats.Id
 import cats.implicits.*
 import cats.kernel.Monoid

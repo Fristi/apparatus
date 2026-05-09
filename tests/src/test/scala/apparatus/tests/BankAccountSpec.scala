@@ -1,8 +1,9 @@
-package apparatus
+package apparatus.tests
 
+import apparatus.*
 import apparatus.core.*
+import apparatus.examples.*
 import cats.effect.IO
-import cats.implicits.*
 import com.dimafeng.testcontainers.PostgreSQLContainer
 import com.dimafeng.testcontainers.munit.TestContainersForAll
 import doobie.*
@@ -18,7 +19,7 @@ import java.util.UUID
 class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
 
   override type Containers = PostgreSQLContainer
-  
+
   val now = Instant.now().truncatedTo(ChronoUnit.MICROS)
 
   override def startContainers(): PostgreSQLContainer =
@@ -44,7 +45,6 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       _ <- DoobieBankAccountTransactionRepository.create()
     yield ()
 
-  // Run one command against a fresh aggregate id, returning the events produced.
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] =
     bankAccount.transactionalDecider(id).flatMap(x => Apparatus.runA(x.tap(transactionsProjection(id, DoobieBankAccountTransactionRepository)), cmd)).transact(xa)
 
@@ -126,11 +126,8 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        // Session 1: open
         _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        // Session 2: deposit — decider must reload Opened event from store
         _ <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(300), now))
-        // Session 3: withdraw — must see balance of 300
         events <- runCommand(xa)(id, BankAccountCommand.Withdraw(BigDecimal(300), now))
       yield assertEquals(events, List(BankAccountEvent.Withdrawn(BigDecimal(300), now)))
     }
