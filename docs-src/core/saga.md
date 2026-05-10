@@ -217,41 +217,49 @@ The pattern:
 
 ```scala
 def sagaRerootedAtCar(
-  flight:        Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
-  car:           Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
-  hotel:         Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider(),
-  bookingEvents: List[SagaEvent[BookingStep]]
+  booking:     Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]],
+  flight:      Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
+  car:         Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
+  carFeedback: Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(initialState = CarState.Reserved),
+  hotel:       Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
 ): Apparatus[Id, CarCommand, List[SagaEvent[BookingStep]]] =
 
   // Car service as the entry point: CarCommand → List[BookingCommand]
   val carCore: Apparatus[Id, CarCommand, List[BookingCommand]] =
     Apparatus.Basic(car.toBaseMachine[Id])
       .rmap(_.collect {
-        case CarEvent.Reserved    => BookingCommand.MarkCarComplete
-        case CarEvent.Failed      => BookingCommand.MarkCarFailed
-        case CarEvent.Compensated => BookingCommand.MarkCarCompensationComplete
+        case CarEvent.Reserved           => BookingCommand.MarkCarComplete
+        case CarEvent.Failed             => BookingCommand.MarkCarFailed
+        case CarEvent.Compensated        => BookingCommand.MarkCarCompensationComplete
+        case CarEvent.CompensationFailed => BookingCommand.MarkCarCompensationFailed
       })
 
-  // Saga orchestrator rehydrated from event log
+  // Booking orchestrator pre-seeded at the current saga state.
   val bookingDeciderAtCar: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-    Apparatus.Basic(
-      DeciderBuilder.seed(SagaState.Waiting[BookingStep])
-        .decide[BookingCommand, List[SagaEvent[BookingStep]]]((s, i) => behavior.decide(s, i))
-        .evolveList((s, e) => behavior.evolve(s, e))
-        .evolveFrom(bookingEvents)
-        .toBaseMachine[Id]
-    )
+    Apparatus.Basic(booking.toBaseMachine[Id])
 
-  // Chain: CarCommand → List[BookingCommand] → feedback(saga, flight+hotel services)
-  carCore >>> bookingDeciderAtCar.feedbackMany(flightServiceFSM(flight) merge hotelServiceFSM(hotel))
+  // carServiceFSM(carFeedback) handles compensation back to the car step if a
+  // later step (e.g. flight) fails after car has already succeeded.
+  carCore >>> bookingDeciderAtCar.feedbackMany(
+    flightServiceFSM(flight) merge carServiceFSM(carFeedback) merge hotelServiceFSM(hotel)
+  )
 ```
 
 The orchestrator rehydrates to the state `Running(Car, remaining={Flight}, compensation={Hotel})` tells the
 orchestrator: hotel was already booked successfully (it's in `compensation`), car is the active
 step, flight is still to come. Now a single `CarCommand.Reserve` drives the rest of the saga:
 
+```scala mdoc:silent
+val bookingAtCarEvents: List[SagaEvent[BookingStep]] = List(
+  SagaEvent.Booted(BookingStep.Hotel, scala.collection.immutable.SortedSet(BookingStep.Car, BookingStep.Flight)),
+  SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
+  SagaEvent.StepStarted(BookingStep.Car)
+)
+val bookingAtCar = behavior.decider.evolveFrom(bookingAtCarEvents)
+```
+
 ```scala mdoc
-val rerootedEvents = Apparatus.runA(sagaRerootedAtCar(), CarCommand.Reserve)
+val rerootedEvents = Apparatus.runA(sagaRerootedAtCar(booking = bookingAtCar), CarCommand.Reserve)
 ```
 
 If car fails, compensation triggers for hotel only (flight was never started):
@@ -259,8 +267,9 @@ If car fails, compensation triggers for hotel only (flight was never started):
 ```scala mdoc
 val carFailEvents = Apparatus.runA(
   sagaRerootedAtCar(
-    car   = carDecider(failsOnReserve = true),
-    hotel = hotelDecider(initialState = HotelState.Reserved)
+    booking = bookingAtCar,
+    car     = carDecider(failsOnReserve = true),
+    hotel   = hotelDecider(initialState = HotelState.Reserved)
   ),
   CarCommand.Reserve
 )
