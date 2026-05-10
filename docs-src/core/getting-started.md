@@ -93,11 +93,11 @@ assert(door.evolve(List(DoorEvent.Opened),  DoorState.Closed(2)) == DoorState.Op
 ## 4. Lift into an Apparatus
 
 `toBaseMachine[F]` turns the `Decider` into a `BaseMachineT` running in effect `F`.
-Wrap it in `Apparatus.Basic` to get a composable machine.
+Wrap it in `Apparatus.Fresh` to get a composable machine.
 
 ```scala mdoc
 val doorFsm: Apparatus[Id, DoorCommand, List[DoorEvent]] =
-  Apparatus.Basic(door.toBaseMachine[Id])
+  Apparatus.Fresh(door.toBaseMachine[Id])
 
 val (events, nextFsm) = Apparatus.run(doorFsm, DoorCommand.Knock)
 ```
@@ -134,7 +134,7 @@ val projection: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   )
 
 val network: Apparatus[Id, DoorCommand, DoorStats] =
-  Apparatus.Basic(door.toBaseMachine[Id]) >>> Apparatus.Basic(projection)
+  Apparatus.Fresh(door.toBaseMachine[Id]) >>> Apparatus.Fresh(projection)
 
 given cats.kernel.Monoid[DoorStats] =
   cats.kernel.Monoid.instance(DoorStats(0, 0), (a, b) => DoorStats(a.opened max b.opened, a.closed max b.closed))

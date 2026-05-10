@@ -93,7 +93,7 @@ val replayed = light.evolveFrom(history)
 
 ```scala mdoc
 val lightFsm: Apparatus[Id, LightCmd, List[LightEvt]] =
-  Apparatus.Basic(light.toBaseMachine[Id])
+  Apparatus.Fresh(light.toBaseMachine[Id])
 
 val (fsmEvts1, next) = Apparatus.run(lightFsm, LightCmd.TurnOn)
 val (fsmEvts2, _)    = Apparatus.run(next,     LightCmd.TurnOff)
@@ -119,7 +119,7 @@ val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
   )
 
 val network: Apparatus[Id, LightCmd, LightStats] =
-  Apparatus.Basic(light.toBaseMachine[Id]) >>> Apparatus.Basic(projection)
+  Apparatus.Fresh(light.toBaseMachine[Id]) >>> Apparatus.Fresh(projection)
 
 given cats.kernel.Monoid[LightStats] =
   cats.kernel.Monoid.instance(LightStats(0, 0), (a, b) => LightStats(a.on max b.on, a.off max b.off))

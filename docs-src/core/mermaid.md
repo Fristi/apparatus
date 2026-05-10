@@ -42,7 +42,7 @@ Label semantics depend on what the node is:
 
 | Mermaid shape | Apparatus node |
 |---|---|
-| `["name"]` rectangle | `Apparatus.Basic` — a single machine |
+| `["name"]` rectangle | `Apparatus.Fresh` / `Apparatus.Stable` — a single machine node |
 | `{"name"}` diamond | `Apparatus.Alternative` (routing) or `Apparatus.LmapOrEmpty` (filter) |
 | `(["name"])` stadium | Structural `split`, `join`, `fan-out`, `combine` connectors |
 
@@ -97,12 +97,12 @@ and `N[A] ↺` respectively. Mermaid renders these as curved arrows that close t
 
 ## Labeling intermediate nodes
 
-The most useful pattern is to label every `Basic` that wraps a domain decider and every
-`lmapOrEmpty` filter:
+The most useful pattern is to label every `Fresh` or `Stable` node that wraps a domain decider
+and every `lmapOrEmpty` filter:
 
 ```scala
 def labeledFlightService(flight: Decider[FlightState, FlightCommand, List[FlightEvent]]) = {
-  val flightDecider = Apparatus.Basic(flight.toBaseMachine[Id]).label("Flight Decider")
+  val flightDecider = Apparatus.Fresh(flight.toBaseMachine[Id]).label("Flight Decider")
   val flightService = flightDecider
     .lmapOrEmpty[SagaEvent[BookingStep]] {
       case SagaEvent.StepStarted(BookingStep.Flight) => FlightCommand.Reserve
