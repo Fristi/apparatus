@@ -4,8 +4,9 @@
 flowchart. Only the structural topology is shown — internal state and transition
 functions are erased at runtime — but labels make a diagram easier to digest how the network is setup.
 
-```scala
+```scala mdoc:silent
 import apparatus.core.*
+import apparatus.examples.*
 import cats.Id
 import cats.implicits.*
 ```
@@ -22,16 +23,11 @@ that supports Mermaid fenced code blocks.
 ## Attaching labels
 
 Call `.label("…")` on any sub-machine before passing the network to `print`.
+The booking saga example already bakes labels into every service machine and the orchestrator,
+so `saga()` produces a fully annotated network:
 
-```scala
-val labeled =
-  bookingDecider.label("Booking Saga") <-> (
-    flightService.label("Flight Service")
-      merge carService.label("Car Service")
-      merge hotelService.label("Hotel Service")
-  )
-
-val diagram = Mermaid.print(labeled)
+```scala mdoc:silent
+val diagram = Mermaid.print(saga())
 ```
 
 Label semantics depend on what the node is:
@@ -52,31 +48,44 @@ Label semantics depend on what the node is:
 
 ## Example output
 
-For the booking saga network:
+`Mermaid.print(saga())` for the three-service booking saga:
 
 ```mermaid
 graph TD
     node_1["Booking Saga"]
     fan_2(["fan-out"])
     combine_3(["combine"])
+    fan_4(["fan-out"])
+    combine_5(["combine"])
     subgraph "Flight Service"
-      filter_4{"Flight Event Router"}
-      node_5["Flight Decider"]
-      node_6["Machine"]
+      filter_6{"Flight Event Router"}
+      node_7["Flight Decider"]
+      node_8["Machine"]
     end
     subgraph "Car Service"
-      filter_7{"Car Event Router"}
-      node_8["Car Decider"]
-      node_9["Machine"]
+      filter_9{"Car Event Router"}
+      node_10["Car Decider"]
+      node_11["Machine"]
     end
-    filter_4 -->|defined| node_5
-    node_5 --> node_6
-    filter_7 -->|defined| node_8
-    node_8 --> node_9
-    fan_2 --> filter_4
-    fan_2 --> filter_7
-    node_6 --> combine_3
-    node_9 --> combine_3
+    subgraph "Hotel Service"
+      filter_12{"Hotel Event Router"}
+      node_13["Hotel Decider"]
+      node_14["Machine"]
+    end
+    filter_6 -->|defined| node_7
+    node_7 --> node_8
+    filter_9 -->|defined| node_10
+    node_10 --> node_11
+    fan_4 --> filter_6
+    fan_4 --> filter_9
+    node_8 --> combine_5
+    node_11 --> combine_5
+    filter_12 -->|defined| node_13
+    node_13 --> node_14
+    fan_2 --> fan_4
+    fan_2 --> filter_12
+    combine_5 --> combine_3
+    node_14 --> combine_3
     node_1 -->|B| fan_2
     combine_3 -->|A ↺| node_1
 ```

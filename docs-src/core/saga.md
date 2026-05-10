@@ -10,12 +10,11 @@ To implement this with Apparatus, you need these things:
 - `Apparatus.Feedback` (`<->`) — the combinator that closes the loop between the saga orchestrator and
   the service machines it drives.
 
-```scala
+```scala mdoc:silent
 import apparatus.core.*
+import apparatus.examples.*
 import cats.Id
-import cats.data.NonEmptySet
 import cats.implicits.*
-import cats.derived.*
 import scala.collection.immutable.SortedSet
 ```
 
@@ -129,7 +128,7 @@ def flightServiceFSM(
 
 Use `merge` to combine all service machines into one fan-out node:
 
-```scala
+```scala mdoc:silent
 val services: Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
   flightServiceFSM() merge carServiceFSM() merge hotelServiceFSM()
 ```
@@ -166,27 +165,14 @@ def saga(...): Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
 Send `BookingCommand.Start` — the saga boots, drives all three services, and returns every
 `SagaEvent` that occurred during the full run:
 
-```scala
-val events = Apparatus.runA(saga(), BookingCommand.Start)
-// List(
-//   Booted(Hotel, {Car, Flight}),
-//   StepProgressed(Hotel, Completed),
-//   StepStarted(Car),
-//   StepProgressed(Car, Completed),
-//   StepStarted(Flight),
-//   StepProgressed(Flight, Completed)
-// )
+```scala mdoc
+val happyPathEvents = Apparatus.runA(saga(), BookingCommand.Start)
 ```
 
 When a step fails, compensation fires automatically:
 
-```scala
-val events = Apparatus.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
-// … StepProgressed(Flight, Failed)
-// … CompensationTriggered(Car, {Hotel})
-// … CompensationProgressed(Car, Completed)
-// … CompensationStarted(Hotel)
-// … CompensationProgressed(Hotel, Completed)
+```scala mdoc
+val failEvents = Apparatus.runA(saga(flight = flightDecider(failsOnReserve = true)), BookingCommand.Start)
 ```
 
 Only steps that had already completed are compensated. Flight failed before completing, so it is
@@ -210,11 +196,11 @@ need to resume from the *current* saga state and drive *only the remaining* serv
 `feedbackMany` is like `<->` but accepts `List[BookingCommand]` as input instead of a single
 `BookingCommand`. Use it when the entry point is a sub-machine whose output is already `List[_]`:
 
-```scala
+```scala mdoc
 val node: Apparatus[Id, List[BookingCommand], List[SagaEvent[BookingStep]]] =
   bookingDecider.feedbackMany(services)
 
-val events = Apparatus.runA(node, List(BookingCommand.Start))
+val feedbackManyEvents = Apparatus.runA(node, List(BookingCommand.Start))
 ```
 
 ### Rerooting at a service machine
@@ -231,61 +217,62 @@ The pattern:
 
 ```scala
 def sagaRerootedAtCar(
-  flight:       Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
-  car:          Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
-  hotel:        Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider(),
-  bookingEvents: List[SagaEvent[BookingStep]]
+  booking:     Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]],
+  flight:      Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
+  car:         Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
+  carFeedback: Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(initialState = CarState.Reserved),
+  hotel:       Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
 ): Apparatus[Id, CarCommand, List[SagaEvent[BookingStep]]] =
 
   // Car service as the entry point: CarCommand → List[BookingCommand]
   val carCore: Apparatus[Id, CarCommand, List[BookingCommand]] =
     Apparatus.Basic(car.toBaseMachine[Id])
       .rmap(_.collect {
-        case CarEvent.Reserved    => BookingCommand.MarkCarComplete
-        case CarEvent.Failed      => BookingCommand.MarkCarFailed
-        case CarEvent.Compensated => BookingCommand.MarkCarCompensationComplete
+        case CarEvent.Reserved           => BookingCommand.MarkCarComplete
+        case CarEvent.Failed             => BookingCommand.MarkCarFailed
+        case CarEvent.Compensated        => BookingCommand.MarkCarCompensationComplete
+        case CarEvent.CompensationFailed => BookingCommand.MarkCarCompensationFailed
       })
 
-  // Saga orchestrator rehydrated
+  // Booking orchestrator pre-seeded at the current saga state.
   val bookingDeciderAtCar: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-    Apparatus.Basic(
-      DeciderBuilder.seed(SagaState.Waiting)
-        .decide[BookingCommand, List[SagaEvent[BookingStep]]]((s, i) => behavior.decide(s, i))
-        .evolveList((s, e) => behavior.evolve(s, e))
-        .evolveFrom(bookingEvents)
-        .toBaseMachine[Id]
-    )
+    Apparatus.Basic(booking.toBaseMachine[Id])
 
-  // Chain: CarCommand → List[BookingCommand] → feedback(saga, flight+hotel services)
-  carCore >>> bookingDeciderAtCar.feedbackMany(flightServiceFSM(flight) merge hotelServiceFSM(hotel))
+  // carServiceFSM(carFeedback) handles compensation back to the car step if a
+  // later step (e.g. flight) fails after car has already succeeded.
+  carCore >>> bookingDeciderAtCar.feedbackMany(
+    flightServiceFSM(flight) merge carServiceFSM(carFeedback) merge hotelServiceFSM(hotel)
+  )
 ```
 
 The orchestrator rehydrates to the state `Running(Car, remaining={Flight}, compensation={Hotel})` tells the
 orchestrator: hotel was already booked successfully (it's in `compensation`), car is the active
 step, flight is still to come. Now a single `CarCommand.Reserve` drives the rest of the saga:
 
-```scala
-val events = Apparatus.runA(sagaRerootedAtCar(), CarCommand.Reserve)
-// List(
-//   StepProgressed(Car, Completed),
-//   StepStarted(Flight),
-//   StepProgressed(Flight, Completed)
-// )
+```scala mdoc:silent
+val bookingAtCarEvents: List[SagaEvent[BookingStep]] = List(
+  SagaEvent.Booted(BookingStep.Hotel, scala.collection.immutable.SortedSet(BookingStep.Car, BookingStep.Flight)),
+  SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
+  SagaEvent.StepStarted(BookingStep.Car)
+)
+val bookingAtCar = behavior.decider.evolveFrom(bookingAtCarEvents)
+```
+
+```scala mdoc
+val rerootedEvents = Apparatus.runA(sagaRerootedAtCar(booking = bookingAtCar), CarCommand.Reserve)
 ```
 
 If car fails, compensation triggers for hotel only (flight was never started):
 
-```scala
-val events = Apparatus.runA(
+```scala mdoc
+val carFailEvents = Apparatus.runA(
   sagaRerootedAtCar(
-    car   = carDecider(failsOnReserve = true),
-    hotel = hotelDecider(initialState = HotelState.Reserved)
+    booking = bookingAtCar,
+    car     = carDecider(failsOnReserve = true),
+    hotel   = hotelDecider(initialState = HotelState.Reserved)
   ),
   CarCommand.Reserve
 )
-// StepProgressed(Car, Failed)
-// CompensationTriggered(Hotel, {})
-// CompensationProgressed(Hotel, Completed)
 ```
 
 ### When to reroot
