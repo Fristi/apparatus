@@ -11,15 +11,32 @@ import cats.implicits.*
   *
   * === Building machines ===
   *
-  * Wrap any [[BaseMachineT]] (or a [[Decider]] via `toBaseMachine`) in [[Apparatus.Basic]]:
+  * Wrap any [[BaseMachineT]] (or a [[Decider]] via `toBaseMachine`) in one of two leaf nodes:
+  *
+  *   - [[Apparatus.Fresh]] — the machine evolves independently; each position in the tree
+  *     maintains its own state and is never shared with any other node.
+  *   - [[Apparatus.Stable]] — memoized by `id`; if the same id appears in multiple
+  *     positions of the same tree, all positions share their machine state.  State
+  *     produced by the first matching node in a [[Apparatus.Sequential]] composition
+  *     is automatically propagated into subsequent positions before they run.
+  *     This mirrors the memoization model of ZIO ZLayer.
+  *
   * {{{
-  *   val door: Apparatus[Id, DoorCmd, List[DoorEvt]] =
-  *     Apparatus.Basic(myDecider.toBaseMachine[Id])
+  *   // independent — two separate car machines
+  *   val a = Apparatus.Fresh(carDecider.toBaseMachine[Id])
+  *   val b = Apparatus.Fresh(carDecider.toBaseMachine[Id])
+  *
+  *   // shared — carCore and carInServices share state across ">>>"
+  *   val carMachine = carDecider.toBaseMachine[Id]
+  *   val carNode1   = Apparatus.Stable("car", carMachine)
+  *   val carNode2   = Apparatus.Stable("car", carMachine)  // same id → same state
   * }}}
   *
   * === Combinators ===
   *
-  *   - [[Apparatus.Sequential]] / `>>>` — pipe `left` output into `right` input each step
+  *   - [[Apparatus.Sequential]] / `>>>` — pipe `left` output into `right` input each step;
+  *                                         also propagates updated [[Apparatus.Stable]] nodes
+  *                                         from `left` into `right` before `right` runs.
   *   - [[Apparatus.Parallel]]   / `***` — run two independent machines on a pair of inputs
   *   - [[Apparatus.Alternative]]/ `|||` — route `Either`-typed input to left or right machine
   *   - [[Apparatus.Feedback]]   / `<->` — close a bidirectional loop; `left` drives `right`,
@@ -47,6 +64,13 @@ sealed trait Apparatus[F[_], I, O] { outer =>
 
   /** Transform the effect type via a natural transformation. */
   def mapK[G[_]](f: F ~> G): Apparatus[G, I, O]
+
+  /** Replace [[Apparatus.Stable]] nodes whose id appears in `registry` with the
+    * updated machine from `registry`.  Each subclass implements this using its
+    * own captured given instances so that `Feedback`/`FeedbackMany` can rebuild
+    * themselves without requiring the instances to be re-summoned.
+    */
+  private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O]
 }
 
 extension [F[_], A, B](left: Apparatus[F, A, B]) {
@@ -63,6 +87,9 @@ extension [F[_], A, B](left: Apparatus[F, A, B]) {
 
       def mapK[G[_]](f: F ~> G): Apparatus[G, A, B] =
         left.mapK(f).tap(right.mapK(f))
+
+      private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, A, B] =
+        left.patchStableNodes(registry).tap(right.patchStableNodes(registry))
 
   /** Bidirectional mapping via [[Iso]]: adapt input with `isoIn.from`, output with `isoOut.to`. */
   def imap[A2, B2](using isoIn: Iso[A, A2], isoOut: Iso[B, B2], A: Applicative[F]): Apparatus[F, A2, B2] =
@@ -86,16 +113,16 @@ extension [F[_], A, B](left: Apparatus[F, A, B]) {
   /** Contramap the input: transform `C` to `A` before feeding each step. */
   def lmap[C](f: C => A)(using A: Applicative[F]): Apparatus[F, C, B] =
     left match
-      case Apparatus.Basic(m) => Apparatus.Basic(m.lmap(f))
+      case Apparatus.Fresh(m) => Apparatus.Fresh(m.lmap(f))
       case Apparatus.Sequential(l, r) => Apparatus.Sequential(l.lmap(f), r)
-      case machine => Apparatus.Basic(BaseMachineT.stateless[F, C, A](c => f(c).pure[F])) >>> machine
+      case machine => Apparatus.Fresh(BaseMachineT.stateless[F, C, A](c => f(c).pure[F])) >>> machine
 
   /** Map the output: transform `B` to `C` after each step. */
   def rmap[C](f: B => C)(using A: Applicative[F]): Apparatus[F, A, C] =
     left match
-      case Apparatus.Basic(m) => Apparatus.Basic(m.rmap(f))
+      case Apparatus.Fresh(m) => Apparatus.Fresh(m.rmap(f))
       case Apparatus.Sequential(l, r) => Apparatus.Sequential(l, r.rmap(f))
-      case machine => machine >>> Apparatus.Basic(BaseMachineT.stateless[F, B, C](b => f(b).pure[F]))
+      case machine => machine >>> Apparatus.Fresh(BaseMachineT.stateless[F, B, C](b => f(b).pure[F]))
 
   /** Adapt both input and output in a single pass. */
   def dimap[C, D](f: C => A)(g: B => D)(using A: Applicative[F]): Apparatus[F, C, D] =
@@ -147,20 +174,53 @@ extension [F[_], M[_], A, B](left: Apparatus[F, A, M[B]]) {
 }
 
 object Apparatus:
-  /** Wraps a single [[BaseMachineT]], threading its internal state across steps. */
-  case class Basic[F[_], I, O](machine: BaseMachineT[F, I, O]) extends Apparatus[F, I, O]:
-    def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
-      machine.step(input).map((o, s) => (o, Basic(BaseMachineT(s, (s, i) => machine.action(s, i)))))
-    def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Basic(machine.mapK(f))
 
-  /** Pipes `left`'s output directly into `right`'s input each step. */
+  /** Wraps a single [[BaseMachineT]], threading its internal state across steps.
+    *
+    * Each `Fresh` node evolves **independently** — it never shares state with any
+    * other node, even if constructed from the same [[BaseMachineT]] value.
+    */
+  case class Fresh[F[_], I, O](machine: BaseMachineT[F, I, O]) extends Apparatus[F, I, O]:
+    def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
+      machine.step(input).map((o, s) => (o, Fresh(BaseMachineT(s, (s, i) => machine.action(s, i)))))
+    def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Fresh(machine.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O] = this
+
+  /** Wraps a [[BaseMachineT]] and tags it with a stable `id`.
+    *
+    * When the same `id` appears in multiple positions within a [[Sequential]]
+    * composition (`>>>`), the state produced by the earlier position is
+    * automatically propagated into every later position before it runs.  This
+    * makes it possible to share a single logical machine (e.g. a car decider)
+    * across both an entry-point node and a feedback-reactor node without
+    * manually pre-seeding the state.
+    *
+    * Nodes with **different** ids, or [[Fresh]] nodes, are always independent.
+    */
+  case class Stable[F[_], I, O](id: String, machine: BaseMachineT[F, I, O]) extends Apparatus[F, I, O]:
+    def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
+      machine.step(input).map((o, s) => (o, Stable(id, BaseMachineT(s, (s, i) => machine.action(s, i)))))
+    def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Stable(id, machine.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O] =
+      registry.get(id).fold(this)(m => Stable(id, m.asInstanceOf[BaseMachineT[F, I, O]]))
+
+  /** Pipes `left`'s output directly into `right`'s input each step.
+    *
+    * After `left` runs, any updated [[Stable]] nodes found in the resulting
+    * machine are propagated into `right` before `right` runs, so that shared
+    * nodes (same id) see the state advanced by `left`.
+    */
   case class Sequential[F[_], A, B, C](left: Apparatus[F, A, B], right: Apparatus[F, B, C]) extends Apparatus[F, A, C]:
     def runWith(input: A)(using Monad[F]): F[(C, Apparatus[F, A, C])] =
       for
         (o1, l2) <- run(left, input)
-        (o2, r2) <- run(right, o1)
+        stable    = collectStable(l2)
+        patched   = if stable.nonEmpty then right.patchStableNodes(stable) else right
+        (o2, r2) <- run(patched, o1)
       yield (o2, Sequential(l2, r2))
     def mapK[G[_]](f: F ~> G): Apparatus[G, A, C] = Sequential(left.mapK(f), right.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, A, C] =
+      Sequential(left.patchStableNodes(registry), right.patchStableNodes(registry))
 
   /** Runs `left` and `right` independently on the two halves of a pair. */
   case class Parallel[F[_], A, B, C, D](left: Apparatus[F, A, B], right: Apparatus[F, C, D]) extends Apparatus[F, (A, C), (B, D)]:
@@ -170,6 +230,8 @@ object Apparatus:
         (o2, r2) <- run(right, input._2)
       yield ((o1, o2), Parallel(l2, r2))
     def mapK[G[_]](f: F ~> G): Apparatus[G, (A, C), (B, D)] = Parallel(left.mapK(f), right.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, (A, C), (B, D)] =
+      Parallel(left.patchStableNodes(registry), right.patchStableNodes(registry))
 
   /** Routes `Left` inputs to `left` and `Right` inputs to `right`; the unmatched
     * machine keeps its state untouched.
@@ -180,6 +242,8 @@ object Apparatus:
         case Left(l)  => run(left, l).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
         case Right(r) => run(right, r).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
     def mapK[G[_]](f: F ~> G): Apparatus[G, Either[A, C], Either[B, D]] = Alternative(left.mapK(f), right.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, Either[A, C], Either[B, D]] =
+      Alternative(left.patchStableNodes(registry), right.patchStableNodes(registry))
 
   /** Closed feedback loop between two machines.
     *
@@ -211,6 +275,8 @@ object Apparatus:
             yield result
       loop(left, right, List(a), monoidNB.empty)
     def mapK[G[_]](f: F ~> G): Apparatus[G, A, N[B]] = Feedback(left.mapK(f), right.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, A, N[B]] =
+      Feedback(left.patchStableNodes(registry), right.patchStableNodes(registry))
 
   /** Like [[Feedback]] but accepts `N[A]` (a collection) as the initial input instead of
     * a single `A`. All elements are processed through the same feedback loop in order.
@@ -237,6 +303,8 @@ object Apparatus:
             yield result
       loop(left, right, foldN.toList(nas), monoidNB.empty)
     def mapK[G[_]](f: F ~> G): Apparatus[G, N[A], N[B]] = FeedbackMany(left.mapK(f), right.mapK(f))
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, N[A], N[B]] =
+      FeedbackMany(left.patchStableNodes(registry), right.patchStableNodes(registry))
 
   /** Routes input via a partial function; returns [[Monoid.empty]] without advancing state
     * when the function is undefined for the given input.
@@ -247,6 +315,8 @@ object Apparatus:
         case Some(a) => inner.runWith(a).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
         case None    => (mb.empty, this).pure[F]
     def mapK[G[_]](f: F ~> G): Apparatus[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, C, B] =
+      LmapOrEmpty(inner.patchStableNodes(registry), pf, mb)
 
   /** Runs both machines on the same input; outputs are combined via [[Monoid]].
     * Both machines advance state independently on every step.
@@ -258,18 +328,22 @@ object Apparatus:
         (b2, r2) <- run(right, input)
       yield (mb.combine(b1, b2), Merged(l2, r2, mb))
     def mapK[G[_]](f: F ~> G): Apparatus[G, A, B] = Merged(left.mapK(f), right.mapK(f), mb)
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, A, B] =
+      Merged(left.patchStableNodes(registry), right.patchStableNodes(registry), mb)
 
   /** Attaches a human-readable label used by [[apparatus.core.ApparatusMermaid]].
-    * On a [[Basic]] it renames the node; on composites it wraps in a subgraph.
+    * On a [[Fresh]] or [[Stable]] it renames the node; on composites it wraps in a subgraph.
     */
   case class Labeled[F[_], I, O](inner: Apparatus[F, I, O], name: String) extends Apparatus[F, I, O]:
     def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
       inner.runWith(input).map((o, m2) => (o, Labeled(m2, name)))
     def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Labeled(inner.mapK(f), name)
+    private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O] =
+      Labeled(inner.patchStableNodes(registry), name)
 
   /** Stateless identity machine: passes every input through unchanged. */
   def identity[F[_] : Applicative, A]: Apparatus[F, A, A] =
-    Apparatus.Basic(BaseMachineT.stateless[F, A, A](_.pure))
+    Apparatus.Fresh(BaseMachineT.stateless[F, A, A](_.pure))
 
   /** Run a single step, returning output and the updated machine. */
   def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I): F[(O, Apparatus[F, I, O])] =
@@ -321,3 +395,23 @@ object Apparatus:
       override def id[A]: Apparatus[F, A, A] = identity
       override def compose[A, B, C](f: Apparatus[F, B, C], g: Apparatus[F, A, B]): Apparatus[F, A, C] = g.andThen(f)
     }
+
+  // ── Stable-node propagation helpers ─────────────────────────────────────────
+
+  /** Collect all [[Stable]] nodes reachable from `app`, keyed by their id.
+    * The value is the current [[BaseMachineT]] (type-erased as `Any`).
+    * Used by [[Sequential]] to propagate updated state into the right-hand side.
+    */
+  private[core] def collectStable[F[_], I, O](app: Apparatus[F, I, O]): Map[String, Any] =
+    app match
+      case Stable(id, m)           => Map(id -> m)
+      case Sequential(l, r)        => collectStable(l) ++ collectStable(r)
+      case Parallel(l, r)          => collectStable(l) ++ collectStable(r)
+      case Alternative(l, r)       => collectStable(l) ++ collectStable(r)
+      case Feedback(l, r)          => collectStable(l) ++ collectStable(r)
+      case FeedbackMany(l, r)      => collectStable(l) ++ collectStable(r)
+      case LmapOrEmpty(inner, _, _) => collectStable(inner)
+      case Merged(l, r, _)         => collectStable(l) ++ collectStable(r)
+      case Labeled(inner, _)       => collectStable(inner)
+      case _                       => Map.empty
+

@@ -90,7 +90,7 @@ enum SagaEvent[Step]:
   *
   * {{{
   * val fsm: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-  *   Apparatus.Basic(behavior.decider.toBaseMachine)
+  *   Apparatus.Fresh(behavior.decider.toBaseMachine)
   * }}}
   *
   * @tparam Cmd  the command type

@@ -6,14 +6,14 @@ package apparatus.core
   * functions are erased at runtime and cannot be inspected. Attach human-readable
   * names with `.label("…")` before calling [[print]]:
   *
-  *   - `.label("…")` on an [[Apparatus.Basic]]       → renames the node box.
-  *   - `.label("…")` on an [[Apparatus.LmapOrEmpty]] → renames the filter diamond.
-  *   - `.label("…")` on any composite                → wraps it in a Mermaid `subgraph`.
+  *   - `.label("…")` on an [[Apparatus.Fresh]] or [[Apparatus.Stable]] → renames the node box.
+  *   - `.label("…")` on an [[Apparatus.LmapOrEmpty]]                   → renames the filter diamond.
+  *   - `.label("…")` on any composite                                   → wraps it in a Mermaid `subgraph`.
   *
   * === Shape legend ===
   *
   * {{{
-  *   ["name"]   rectangle — Apparatus.Basic (machine node)
+  *   ["name"]   rectangle — Apparatus.Fresh / Apparatus.Stable (machine nodes)
   *   {"name"}   diamond   — Apparatus.Alternative (routing), Apparatus.LmapOrEmpty (filter)
   *   (["name"]) stadium   — structural join/split/fan-out/combine nodes
   * }}}
@@ -76,7 +76,12 @@ object Mermaid:
   private def render[F[_], I, O](fsm: Apparatus[F, I, O], ctx: Context): (String, String) =
     fsm match
 
-      case Apparatus.Labeled(Apparatus.Basic(_), name) =>
+      case Apparatus.Labeled(Apparatus.Fresh(_), name) =>
+        val id = ctx.fresh("node")
+        ctx.node(id, name, Shape.Box)
+        (id, id)
+
+      case Apparatus.Labeled(Apparatus.Stable(stableId, _), name) =>
         val id = ctx.fresh("node")
         ctx.node(id, name, Shape.Box)
         (id, id)
@@ -94,9 +99,14 @@ object Mermaid:
         ctx.closeSubgraph()
         result
 
-      case Apparatus.Basic(_) =>
+      case Apparatus.Fresh(_) =>
         val id = ctx.fresh("node")
         ctx.node(id, "Machine", Shape.Box)
+        (id, id)
+
+      case Apparatus.Stable(stableId, _) =>
+        val id = ctx.fresh("node")
+        ctx.node(id, stableId, Shape.Box)
         (id, id)
 
       case Apparatus.Sequential(left, right) =>

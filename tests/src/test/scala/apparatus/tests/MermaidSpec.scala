@@ -79,51 +79,55 @@ class MermaidSpec extends munit.FunSuite:
 
   // ── sagaRerootedAtCar() snapshot ──────────────────────────────────────────────
   // Entry point is CarCommand, not BookingCommand.
-  // bookingDecider is an unlabeled Basic (rehydrated from events) → shows as "Machine".
+  // carCore is Stable("car") so node_1 shows its id "car" rather than "Machine".
+  // node_2 is the stateless rmap machine chained after carCore via >>>.
+  // node_3 is the bookingDecider (Fresh, unlabeled) → shows as "Machine".
   // All three services appear in the feedback reactor:
   //   - Flight and Hotel as forward services
-  //   - Car (via carFeedback pre-seeded at Reserved) to handle compensation after car succeeds
+  //   - Car (Stable("car"), shares state with carCore) to handle compensation
 
   private val expectedRerooted: String =
     s"""graph TD
-       |    node_1["Machine"]
+       |    node_1["car"]
        |    node_2["Machine"]
-       |    fan_3(["fan-out"])
-       |    combine_4(["combine"])
-       |    fan_5(["fan-out"])
-       |    combine_6(["combine"])
+       |    node_3["Machine"]
+       |    fan_4(["fan-out"])
+       |    combine_5(["combine"])
+       |    fan_6(["fan-out"])
+       |    combine_7(["combine"])
        |    subgraph "Flight Service"$sg
-       |    filter_7{"Flight Event Router"}
-       |    node_8["Flight Decider"]
-       |    node_9["Machine"]
+       |    filter_8{"Flight Event Router"}
+       |    node_9["Flight Decider"]
+       |    node_10["Machine"]
        |    end
        |    subgraph "Car Service"$sg
-       |    filter_10{"Car Event Router"}
-       |    node_11["Car Decider"]
-       |    node_12["Machine"]
+       |    filter_11{"Car Event Router"}
+       |    node_12["Car Decider"]
+       |    node_13["Machine"]
        |    end
        |    subgraph "Hotel Service"$sg
-       |    filter_13{"Hotel Event Router"}
-       |    node_14["Hotel Decider"]
-       |    node_15["Machine"]
+       |    filter_14{"Hotel Event Router"}
+       |    node_15["Hotel Decider"]
+       |    node_16["Machine"]
        |    end
-       |    filter_7 -->|defined| node_8
-       |    node_8 --> node_9
-       |    filter_10 -->|defined| node_11
-       |    node_11 --> node_12
-       |    fan_5 --> filter_7
-       |    fan_5 --> filter_10
-       |    node_9 --> combine_6
-       |    node_12 --> combine_6
-       |    filter_13 -->|defined| node_14
-       |    node_14 --> node_15
-       |    fan_3 --> fan_5
-       |    fan_3 --> filter_13
-       |    combine_6 --> combine_4
-       |    node_15 --> combine_4
-       |    node_2 -->|N[B]| fan_3
-       |    combine_4 -->|N[A] ↺| node_2
-       |    node_1 --> node_2""".stripMargin
+       |    node_1 --> node_2
+       |    filter_8 -->|defined| node_9
+       |    node_9 --> node_10
+       |    filter_11 -->|defined| node_12
+       |    node_12 --> node_13
+       |    fan_6 --> filter_8
+       |    fan_6 --> filter_11
+       |    node_10 --> combine_7
+       |    node_13 --> combine_7
+       |    filter_14 -->|defined| node_15
+       |    node_15 --> node_16
+       |    fan_4 --> fan_6
+       |    fan_4 --> filter_14
+       |    combine_7 --> combine_5
+       |    node_16 --> combine_5
+       |    node_3 -->|N[B]| fan_4
+       |    combine_5 -->|N[A] ↺| node_3
+       |    node_2 --> node_3""".stripMargin
 
   test("sagaRerootedAtCar: full snapshot"):
     assertEquals(Mermaid.print(sagaRerootedAtCar(booking = bookingAtCar)), expectedRerooted)
@@ -143,7 +147,7 @@ class MermaidSpec extends munit.FunSuite:
     assert(Mermaid.print(saga()).contains("↺"))
 
   test("sagaRerootedAtCar: all three service subgraphs present in feedback reactor"):
-    // Car is included via carFeedback (pre-seeded at Reserved) to handle compensation
+    // Car is included via Stable("car") shared with carCore to handle compensation
     val d = Mermaid.print(sagaRerootedAtCar(booking = bookingAtCar))
     assert(d.contains("""subgraph "Flight Service""""))
     assert(d.contains("""subgraph "Car Service""""))

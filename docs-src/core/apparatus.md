@@ -30,8 +30,63 @@ val door: Decider[DoorState, DoorCmd, List[DoorEvt]] =
       case (s, _)                              => s
 
 val doorFsm: Apparatus[Id, DoorCmd, List[DoorEvt]] =
-  Apparatus.Basic(door.toBaseMachine[Id])
+  Apparatus.Fresh(door.toBaseMachine[Id])
 ```
+
+## Leaf nodes: `Fresh` and `Stable`
+
+Two constructors wrap a `BaseMachineT` into a leaf node. The difference is how state is shared
+when the same logical machine appears in multiple positions of a composed tree.
+
+### `Apparatus.Fresh` — independent evolution
+
+Each `Fresh` node owns its state exclusively. Even if you pass the same `BaseMachineT` value to
+two `Fresh` calls, the resulting nodes advance independently.
+
+```scala mdoc:silent
+val a = Apparatus.Fresh(door.toBaseMachine[Id])
+val b = Apparatus.Fresh(door.toBaseMachine[Id])
+// a and b are independent: running a does not affect b
+```
+
+Use `Fresh` for the vast majority of nodes. It is the default choice.
+
+### `Apparatus.Stable` — shared state via id
+
+`Stable` wraps a `BaseMachineT` and tags it with a `String` id. When two `Stable` nodes carry
+the same id in a `>>>` (Sequential) composition, the state advanced by the **earlier** node is
+propagated into every **later** node before it runs — without any manual pre-seeding.
+
+This mirrors ZIO ZLayer memoization: the same logical service is instantiated once and reused
+wherever its id appears in the graph.
+
+```scala mdoc:silent
+val doorMachine = door.toBaseMachine[Id]  // reuse same BaseMachineT
+
+// Both positions carry id "door".
+// After the left node runs (e.g. transitions to Open state), Sequential propagates
+// the updated machine into the right node before the right node executes.
+val stableLeft  = Apparatus.Stable("door", doorMachine)
+val stableRight = Apparatus.Stable("door", doorMachine)
+
+val sharedPipeline: Apparatus[Id, DoorCmd, List[DoorEvt]] =
+  stableLeft >>> Apparatus.Fresh(BaseMachineT.stateless[Id, List[DoorEvt], List[DoorEvt]](_.pure))
+// stableRight, placed inside a feedback reactor, starts from the state
+// that stableLeft produced — not from the initial state
+```
+
+The practical motivation is the **rerooted saga** pattern: a car-booking service appears both as
+the entry point (`carCore`) and inside the feedback compensation reactor. With `Stable("car", m)`
+in both positions, after `carCore` processes `Reserve` (car transitions to `Reserved`), the
+compensation service automatically starts from `Reserved` — no `.copy(state = CarState.Reserved)`
+required.
+
+**Rule of thumb**
+
+| When | Use |
+|------|-----|
+| Machine appears once, or each position should start fresh | `Fresh` |
+| Same logical machine drives two different phases (e.g. forward + compensation) within one `>>>` chain | `Stable` |
 
 ## Running a machine
 
@@ -50,6 +105,8 @@ val (allEvts, _) = Apparatus.runMultiple(doorFsm, List(DoorCmd.Open, DoorCmd.Clo
 ### Sequential — `>>>` / `andThen`
 
 Pipe output of the left machine directly into the right machine's input each step.
+Any [[Apparatus.Stable]] nodes updated by `left` are propagated into `right` before `right` runs,
+so shared nodes (same id) carry forward the state advanced by `left`.
 
 ```
 A ──► [left: A→B] ──► B ──► [right: B→C] ──► C
@@ -57,7 +114,7 @@ A ──► [left: A→B] ──► B ──► [right: B→C] ──► C
 
 ```scala mdoc:silent
 val pipeline: Apparatus[Id, DoorCmd, String] =
-  doorFsm >>> Apparatus.Basic(BaseMachineT.stateless[Id, List[DoorEvt], String](evts => evts.mkString(",")))
+  doorFsm >>> Apparatus.Fresh(BaseMachineT.stateless[Id, List[DoorEvt], String](evts => evts.mkString(",")))
 ```
 
 ### Parallel — `***` / `par`
@@ -110,7 +167,7 @@ instances (typically `List`).
 ```scala mdoc:silent
 // Contrived example: bounce door commands back-and-forth
 val echo: Apparatus[Id, DoorEvt, List[DoorCmd]] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, DoorEvt, List[DoorCmd]] {
+  Apparatus.Fresh(BaseMachineT.stateless[Id, DoorEvt, List[DoorCmd]] {
     case DoorEvt.Opened => List(DoorCmd.Close)
     case DoorEvt.Closed => Nil
   })
@@ -136,7 +193,7 @@ This combinator is especially useful when multiple service machines share the sa
 ```scala mdoc:silent
 // Each sub-machine is silent (List.empty) for unrecognised events
 val flightMachine: Apparatus[Id, SagaEvent[String], List[String]] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("flight-ack")))
+  Apparatus.Fresh(BaseMachineT.stateless[Id, String, List[String]](_ => List("flight-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("flight") => "flight" }
 ```
 
@@ -157,11 +214,11 @@ result.
 
 ```scala mdoc:silent
 val hotelMachine: Apparatus[Id, SagaEvent[String], List[String]] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("hotel-ack")))
+  Apparatus.Fresh(BaseMachineT.stateless[Id, String, List[String]](_ => List("hotel-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("hotel") => "hotel" }
 
 val carMachine: Apparatus[Id, SagaEvent[String], List[String]] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, String, List[String]](_ => List("car-ack")))
+  Apparatus.Fresh(BaseMachineT.stateless[Id, String, List[String]](_ => List("car-ack")))
     .lmapOrEmpty { case SagaEvent.StepStarted("car") => "car" }
 
 val services: Apparatus[Id, SagaEvent[String], List[String]] =

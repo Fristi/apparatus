@@ -114,7 +114,7 @@ Each service machine:
 def flightServiceFSM(
   flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider()
 ): Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
-  Apparatus.Basic(flight.toBaseMachine[Id])
+  Apparatus.Fresh(flight.toBaseMachine[Id])
     .lmapOrEmpty[SagaEvent[BookingStep]] {
       case SagaEvent.Booted(BookingStep.Flight, _)                | SagaEvent.StepStarted(BookingStep.Flight)         => FlightCommand.Reserve
       case SagaEvent.CompensationTriggered(BookingStep.Flight, _) | SagaEvent.CompensationStarted(BookingStep.Flight) => FlightCommand.Compensate
@@ -156,7 +156,7 @@ BookingCommand ──► [bookingDecider: emits List[SagaEvent]]
 
 ```scala
 val bookingDecider: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-  Apparatus.Basic(behavior.decider.toBaseMachine)
+  Apparatus.Fresh(behavior.decider.toBaseMachine)
 
 def saga(...): Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
   bookingDecider <-> services
@@ -217,16 +217,19 @@ The pattern:
 
 ```scala
 def sagaRerootedAtCar(
-  booking:     Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]],
-  flight:      Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
-  car:         Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
-  carFeedback: Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(initialState = CarState.Reserved),
-  hotel:       Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
+  booking: Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]],
+  flight:  Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider(),
+  car:     Decider[CarState,    CarCommand,    List[CarEvent]]    = carDecider(),
+  hotel:   Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
 ): Apparatus[Id, CarCommand, List[SagaEvent[BookingStep]]] =
 
-  // Car service as the entry point: CarCommand → List[BookingCommand]
+  val carMachine = car.toBaseMachine[Id]
+
+  // Stable("car") tags the car node with an id so both positions share state.
+  // After carCore runs (Reserve → Reserved), Sequential propagates the updated
+  // machine into carServiceInFeedback before the feedback loop starts.
   val carCore: Apparatus[Id, CarCommand, List[BookingCommand]] =
-    Apparatus.Basic(car.toBaseMachine[Id])
+    Apparatus.Stable("car", carMachine)
       .rmap(_.collect {
         case CarEvent.Reserved           => BookingCommand.MarkCarComplete
         case CarEvent.Failed             => BookingCommand.MarkCarFailed
@@ -234,14 +237,24 @@ def sagaRerootedAtCar(
         case CarEvent.CompensationFailed => BookingCommand.MarkCarCompensationFailed
       })
 
-  // Booking orchestrator pre-seeded at the current saga state.
   val bookingDeciderAtCar: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-    Apparatus.Basic(booking.toBaseMachine[Id])
+    Apparatus.Fresh(booking.toBaseMachine[Id])
 
-  // carServiceFSM(carFeedback) handles compensation back to the car step if a
-  // later step (e.g. flight) fails after car has already succeeded.
+  val carServiceInFeedback: Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
+    Apparatus.Stable("car", carMachine)  // same id → receives Reserved state from carCore
+      .lmapOrEmpty[SagaEvent[BookingStep]] {
+        case SagaEvent.Booted(BookingStep.Car, _)                | SagaEvent.StepStarted(BookingStep.Car)         => CarCommand.Reserve
+        case SagaEvent.CompensationTriggered(BookingStep.Car, _) | SagaEvent.CompensationStarted(BookingStep.Car) => CarCommand.Compensate
+      }
+      .rmap(_.collect {
+        case CarEvent.Reserved           => BookingCommand.MarkCarComplete
+        case CarEvent.Failed             => BookingCommand.MarkCarFailed
+        case CarEvent.Compensated        => BookingCommand.MarkCarCompensationComplete
+        case CarEvent.CompensationFailed => BookingCommand.MarkCarCompensationFailed
+      })
+
   carCore >>> bookingDeciderAtCar.feedbackMany(
-    flightServiceFSM(flight) merge carServiceFSM(carFeedback) merge hotelServiceFSM(hotel)
+    flightServiceFSM(flight) merge carServiceInFeedback merge hotelServiceFSM(hotel)
   )
 ```
 

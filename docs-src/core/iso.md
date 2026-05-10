@@ -83,7 +83,7 @@ case class In(x: Int, flag: Boolean)
 case class Out(label: String, value: Double)
 
 val tupleFsm: Apparatus[Id, (Int, Boolean), (String, Double)] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, (Int, Boolean), (String, Double)] {
+  Apparatus.Fresh(BaseMachineT.stateless[Id, (Int, Boolean), (String, Double)] {
     case (n, b) => (if b then "yes" else "no", n.toDouble)
   })
 
@@ -104,13 +104,13 @@ case class Negated(n: Int)  extends Result
 case object Zero            extends Result
 
 val doubleFsm: Apparatus[Id, Add, Doubled] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, Add, Doubled](c => Doubled(c.n * 2)))
+  Apparatus.Fresh(BaseMachineT.stateless[Id, Add, Doubled](c => Doubled(c.n * 2)))
 
 val negateFsm: Apparatus[Id, Mul, Negated] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, Mul, Negated](c => Negated(-c.n)))
+  Apparatus.Fresh(BaseMachineT.stateless[Id, Mul, Negated](c => Negated(-c.n)))
 
 val resetFsm2: Apparatus[Id, Reset.type, Zero.type] =
-  Apparatus.Basic(BaseMachineT.stateless[Id, Reset.type, Zero.type](_ => Zero))
+  Apparatus.Fresh(BaseMachineT.stateless[Id, Reset.type, Zero.type](_ => Zero))
 
 // Right-group to match sumIso nesting
 val eitherFsm = doubleFsm ||| (negateFsm ||| resetFsm2)

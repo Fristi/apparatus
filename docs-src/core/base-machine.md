@@ -77,10 +77,10 @@ val safe: BaseMachineT[Fallible, String, Double] =
 
 ## Wrapping in Apparatus
 
-`BaseMachineT` becomes composable once wrapped in `Apparatus.Basic`:
+`BaseMachineT` becomes composable once wrapped in `Apparatus.Fresh`:
 
 ```scala mdoc:silent
-val fsmCounter: Apparatus[Id, Int, Int] = Apparatus.Basic(counter)
+val fsmCounter: Apparatus[Id, Int, Int] = Apparatus.Fresh(counter)
 ```
 
 See [Apparatus](apparatus.md) for how to compose machines with `>>>`, `***`, `|||`, and `<->`.

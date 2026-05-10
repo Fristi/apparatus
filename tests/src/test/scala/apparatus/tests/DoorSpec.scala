@@ -70,7 +70,7 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   )
 
 def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
-  Apparatus.Sequential(Apparatus.Basic(door.toBaseMachine[Id]), Apparatus.Basic(doorProject))
+  Apparatus.Sequential(Apparatus.Fresh(door.toBaseMachine[Id]), Apparatus.Fresh(doorProject))
 
 def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): (O, Apparatus[Id, DoorCommand, O]) =
   Apparatus.runMultiple(fsm, cmds)
