@@ -221,5 +221,5 @@ def sagaRerootedAtCar(
   // carServiceFSM(carFeedback) handles compensation back to the car step if a
   // later step (e.g. flight) fails after car has already succeeded.
   carCore >>> bookingDeciderAtCar.feedbackMany(
-    flightServiceFSM(flight) merge carServiceFSM(car) merge hotelServiceFSM(hotel)
+    flightServiceFSM(flight) merge carServiceFSM(car.copy(state = CarState.Reserved)) merge hotelServiceFSM(hotel)
   )

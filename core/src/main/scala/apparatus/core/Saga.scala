@@ -193,25 +193,20 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
           case SagaEvent.Booted(startStep, todo) => SagaState.Running(startStep, todo, SortedSet.empty)
           case _ => state
         }
-      case SagaState.Running(current, todo, compensation) =>
+      case SagaState.Running(_, todo, compensation) =>
         evt match {
-          case SagaEvent.StepProgressed(name, result) =>
-            result match {
-              case SagaStepResult.Completed =>
-                SagaState.Running(current, todo - name, compensation + name)
-              case _ => state
-            }
-          case SagaEvent.CompensationTriggered(current, todo) => SagaState.Compensating(current, todo)
+          case SagaEvent.StepProgressed(name, SagaStepResult.Completed) =>
+            if todo.isEmpty then SagaState.Succeeded()
+            else SagaState.Running(todo.head, todo.tail, compensation + name)
+          case SagaEvent.CompensationTriggered(startStep, compensTodo) =>
+            SagaState.Compensating(startStep, compensTodo)
           case _ => state
         }
-      case SagaState.Compensating(current, todo) =>
+      case SagaState.Compensating(_, todo) =>
         evt match {
-          case SagaEvent.CompensationProgressed(name, result) =>
-            result match {
-              case SagaStepResult.Completed =>
-                SagaState.Compensating(current, todo - name)
-              case _ => state
-            }
+          case SagaEvent.CompensationProgressed(_, SagaStepResult.Completed) =>
+            if todo.isEmpty then SagaState.Failed()
+            else SagaState.Compensating(todo.head, todo.tail)
           case _ => state
         }
 
