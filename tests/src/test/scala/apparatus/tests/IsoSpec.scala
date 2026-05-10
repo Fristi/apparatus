@@ -23,12 +23,12 @@ case class Out(a: Boolean, b: Double)
 
 // --- fixtures ---
 
-val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.Basic(BaseMachineT.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
-val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.Basic(BaseMachineT.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
-val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.Basic(BaseMachineT.stateless[Id, Reset, WasReset](_ => WasReset()))
+val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.Fresh(BaseMachineT.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
+val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.Fresh(BaseMachineT.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
+val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.Fresh(BaseMachineT.stateless[Id, Reset, WasReset](_ => WasReset()))
 
-val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.Basic(BaseMachineT.stateless[Id, Int,    Boolean](n => n > 0))
-val strFsm:  Apparatus[Id, String, Double]  = Apparatus.Basic(BaseMachineT.stateless[Id, String, Double](_.toDouble))
+val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.Fresh(BaseMachineT.stateless[Id, Int,    Boolean](n => n > 0))
+val strFsm:  Apparatus[Id, String, Double]  = Apparatus.Fresh(BaseMachineT.stateless[Id, String, Double](_.toDouble))
 
 // --- tests ---
 
@@ -88,7 +88,7 @@ class IsoSpec extends munit.FunSuite:
 
   test("imap preserves state across steps"):
     val accumFsm: Apparatus[Id, Inc, Incremented] =
-      Apparatus.Basic(BaseMachineT[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
+      Apparatus.Fresh(BaseMachineT[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
 
     val adtFsm: Apparatus[Id, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
 

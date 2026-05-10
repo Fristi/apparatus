@@ -27,7 +27,7 @@ extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
     * Within a single `ConnectionIO` transaction this will:
     *   1. Acquire an advisory lock on `id` (raises on failure).
     *   2. Load and replay the existing event stream to restore state.
-    *   3. Return a [[Apparatus.Basic]] whose `action` decides, appends, and evolves atomically.
+    *   3. Return a [[Apparatus.Fresh]] whose `action` decides, appends, and evolves atomically.
     */
   def transactionalDecider(id: UUID): ConnectionIO[Apparatus[ConnectionIO, I, List[O]]] =
     for {
@@ -49,6 +49,6 @@ extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
           store.appendAggregateStream(id, eventStreamToAppend).map(_ => (o, ns))
       }
 
-      Apparatus.Basic(baseMachineT)
+      Apparatus.Fresh(baseMachineT)
     }
 }

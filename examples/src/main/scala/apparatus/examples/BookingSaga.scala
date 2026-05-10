@@ -121,14 +121,14 @@ val behavior = new SagaBehavior[BookingCommand, BookingStep] {
   }
 }
 
-val bookingDecider: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] = Apparatus.Basic(behavior.decider.toBaseMachine)
+val bookingDecider: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] = Apparatus.Fresh(behavior.decider.toBaseMachine)
 
 // ── Services wiring ───────────────────────────────────────────────────────────
 
 def flightServiceFSM(
   flight: Decider[FlightState, FlightCommand, List[FlightEvent]] = flightDecider()
 ): Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
-  (Apparatus.Basic(flight.toBaseMachine[Id]).label("Flight Decider")
+  (Apparatus.Fresh(flight.toBaseMachine[Id]).label("Flight Decider")
     .lmapOrEmpty[SagaEvent[BookingStep]] {
       case SagaEvent.Booted(BookingStep.Flight, _)                | SagaEvent.StepStarted(BookingStep.Flight)         => FlightCommand.Reserve
       case SagaEvent.CompensationTriggered(BookingStep.Flight, _) | SagaEvent.CompensationStarted(BookingStep.Flight) => FlightCommand.Compensate
@@ -144,7 +144,7 @@ def flightServiceFSM(
 def carServiceFSM(
   car: Decider[CarState, CarCommand, List[CarEvent]] = carDecider()
 ): Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
-  (Apparatus.Basic(car.toBaseMachine[Id]).label("Car Decider")
+  (Apparatus.Fresh(car.toBaseMachine[Id]).label("Car Decider")
     .lmapOrEmpty[SagaEvent[BookingStep]] {
       case SagaEvent.Booted(BookingStep.Car, _)                | SagaEvent.StepStarted(BookingStep.Car)         => CarCommand.Reserve
       case SagaEvent.CompensationTriggered(BookingStep.Car, _) | SagaEvent.CompensationStarted(BookingStep.Car) => CarCommand.Compensate
@@ -160,7 +160,7 @@ def carServiceFSM(
 def hotelServiceFSM(
   hotel: Decider[HotelState, HotelCommand, List[HotelEvent]] = hotelDecider()
 ): Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
-  (Apparatus.Basic(hotel.toBaseMachine[Id]).label("Hotel Decider")
+  (Apparatus.Fresh(hotel.toBaseMachine[Id]).label("Hotel Decider")
     .lmapOrEmpty[SagaEvent[BookingStep]] {
       case SagaEvent.Booted(BookingStep.Hotel, _)                | SagaEvent.StepStarted(BookingStep.Hotel)         => HotelCommand.Reserve
       case SagaEvent.CompensationTriggered(BookingStep.Hotel, _) | SagaEvent.CompensationStarted(BookingStep.Hotel) => HotelCommand.Compensate
@@ -192,10 +192,11 @@ def saga(
 // Entry point is a CarCommand. The caller rehydrates the booking orchestrator
 // (via `behavior.decider.evolveFrom(events)`) and passes it as `booking`.
 //
-// `carFeedback` is the car sub-decider used *inside* the feedback reactor for
-// compensation — distinct from the entry-point `car` decider, because by the
-// time this network runs the car booking step has already succeeded and the
-// car decider must be pre-seeded at Reserved so it can process Compensate.
+// The car machine is wrapped in a Stable node so that its state is shared
+// between the entry-point carCore and the car service inside the feedback
+// reactor.  After carCore processes the incoming CarCommand the car transitions
+// to Reserved; that updated state is propagated by `>>>` into the feedback
+// services, so compensation can be applied without manually pre-seeding.
 
 def sagaRerootedAtCar(
   booking:     Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]],
@@ -204,9 +205,11 @@ def sagaRerootedAtCar(
   hotel:       Decider[HotelState,  HotelCommand,  List[HotelEvent]]  = hotelDecider()
 ): Apparatus[Id, CarCommand, List[SagaEvent[BookingStep]]] =
 
-  // Translate the incoming CarCommand result into BookingCommands.
+  val carMachine = car.toBaseMachine[Id]
+
+  // Shared car node — both positions carry the same id so state propagates via >>>.
   val carCore: Apparatus[Id, CarCommand, List[BookingCommand]] =
-    Apparatus.Basic(car.toBaseMachine[Id])
+    Apparatus.Stable("car", carMachine)
       .rmap(_.collect {
         case CarEvent.Reserved           => BookingCommand.MarkCarComplete
         case CarEvent.Failed             => BookingCommand.MarkCarFailed
@@ -216,10 +219,25 @@ def sagaRerootedAtCar(
 
   // Booking orchestrator pre-seeded at the current saga state.
   val bookingDeciderAtCar: Apparatus[Id, BookingCommand, List[SagaEvent[BookingStep]]] =
-    Apparatus.Basic(booking.toBaseMachine[Id])
+    Apparatus.Fresh(booking.toBaseMachine[Id])
 
-  // carServiceFSM(carFeedback) handles compensation back to the car step if a
-  // later step (e.g. flight) fails after car has already succeeded.
+  // The car service in the feedback reactor references the same Stable id.
+  // After carCore runs (Reserve → Reserved), Sequential propagates the updated
+  // car machine here, so Compensate is processed from the correct state.
+  val carServiceInFeedback: Apparatus[Id, SagaEvent[BookingStep], List[BookingCommand]] =
+    (Apparatus.Stable("car", carMachine).label("Car Decider")
+      .lmapOrEmpty[SagaEvent[BookingStep]] {
+        case SagaEvent.Booted(BookingStep.Car, _)                | SagaEvent.StepStarted(BookingStep.Car)         => CarCommand.Reserve
+        case SagaEvent.CompensationTriggered(BookingStep.Car, _) | SagaEvent.CompensationStarted(BookingStep.Car) => CarCommand.Compensate
+      }.label("Car Event Router")
+      .rmap(_.collect {
+        case CarEvent.Reserved           => BookingCommand.MarkCarComplete
+        case CarEvent.Failed             => BookingCommand.MarkCarFailed
+        case CarEvent.Compensated        => BookingCommand.MarkCarCompensationComplete
+        case CarEvent.CompensationFailed => BookingCommand.MarkCarCompensationFailed
+      })
+    ).label("Car Service")
+
   carCore >>> bookingDeciderAtCar.feedbackMany(
-    flightServiceFSM(flight) merge carServiceFSM(car.copy(state = CarState.Reserved)) merge hotelServiceFSM(hotel)
+    flightServiceFSM(flight) merge carServiceInFeedback merge hotelServiceFSM(hotel)
   )
