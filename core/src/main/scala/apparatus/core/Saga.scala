@@ -6,37 +6,145 @@ import cats.implicits.*
 
 import scala.collection.immutable.SortedSet
 
+/** Distinguishes which direction a saga is currently running.
+  *
+  * A saga always starts in the [[Forward]] phase, executing its steps in order.
+  * If any step fails the saga switches to [[Compensation]], replaying completed
+  * steps in reverse to undo their side effects.
+  *
+  * `SagaPhase` is embedded in every [[SagaAdvancePrism]] round-trip so that a
+  * single command type (e.g. `BookingCommand.Advance`) can carry both forward
+  * acknowledgements and compensation acknowledgements without ambiguity.
+  */
 enum SagaPhase {
   case Forward
   case Compensation
 }
 
+/** Bidirectional optic between a saga command type `S` and a focus type `A`.
+  *
+  * A `Prism` is the read/write pair needed to embed structured data inside a
+  * sum type:
+  *   - [[getOption]] extracts the focus, returning `None` for variants that do
+  *     not carry the focus.
+  *   - [[reverseGet]] reconstructs the outer type from a focus value.
+  *
+  * This is a minimal optics interface; you do not need a full optics library
+  * to implement it.
+  *
+  * @tparam S the outer (sum) type — typically a command enum
+  * @tparam A the inner focus type — typically a tuple of structured data
+  */
 trait Prism[S, A] {
   def getOption(input: S): Option[A]
   def reverseGet(input: A): S
 }
 
+/** A [[Prism]] specialised for advancing a saga.
+  *
+  * Maps between a saga's command type `Cmd` and the triple
+  * `(step, phase, result)` that describes a single acknowledgement from an
+  * external service:
+  *
+  *   - `step`   — which saga step is being acknowledged (e.g. `BookingStep.Car`)
+  *   - `phase`  — [[SagaPhase.Forward]] or [[SagaPhase.Compensation]]
+  *   - `result` — [[SagaStepResult.Completed]] or [[SagaStepResult.Failed]]
+  *
+  * Implement once per saga command type and pass it to [[SagaBehaviorFactory]]
+  * and to every [[SagaStepAdapter.rmap]] call so the saga orchestrator and the
+  * individual service adapters share a consistent encoding.
+  *
+  * Example (from the booking saga):
+  * {{{
+  * val advancePrism: SagaAdvancePrism[BookingCommand, BookingStep] =
+  *   new Prism[BookingCommand, (BookingStep, SagaPhase, SagaStepResult)] {
+  *     def getOption(cmd: BookingCommand) = cmd match {
+  *       case BookingCommand.Advance(step, phase, result) => Some((step, phase, result))
+  *       case _ => None
+  *     }
+  *     def reverseGet(t: (BookingStep, SagaPhase, SagaStepResult)) =
+  *       BookingCommand.Advance(t._1, t._2, t._3)
+  *   }
+  * }}}
+  *
+  * @tparam Cmd the command type of the saga (e.g. `BookingCommand`)
+  * @tparam Stp the step type of the saga (e.g. `BookingStep`)
+  */
 type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (Stp, SagaPhase, SagaStepResult)]
 
-/**
- * Wraps the specific commands and events from a saga step in this abstraction to
- * - indicate the trigger/start command
- * - indicate the compensation/rollback command
- * - classify the events of this aggregate for the saga (the driver)
- * - provide lmapOrEmpty and rmap transformations
- *
- * @tparam Cmd
- * @tparam Evt
- * @tparam Stp
- */
+/** Bridges a single external service into the saga orchestration machinery.
+  *
+  * Each service participating in a saga needs three pieces of information that
+  * only the domain knows:
+  *   1. Which command starts (or re-starts) this step.
+  *   2. Which command rolls this step back.
+  *   3. How to interpret the service's domain events as saga progress signals.
+  *
+  * `SagaStepAdapter` captures those three concerns and provides two derived
+  * combinators — [[lmapOrEmpty]] and [[rmap]] — that wire a raw service
+  * [[Apparatus]] into the orchestrator's event/command vocabulary.
+  *
+  * == Usage ==
+  *
+  * Implement one adapter per step and keep them as `val`s alongside the saga
+  * definition:
+  * {{{
+  * val carStep = new SagaStepAdapter[CarCommand, CarEvent, BookingStep] {
+  *   def step       = BookingStep.Car
+  *   def start      = CarCommand.Reserve
+  *   def compensate = CarCommand.Compensate
+  *   def classify(ev: CarEvent) = ev match {
+  *     case CarEvent.Reserved           => Some(SagaPhase.Forward      -> SagaStepResult.Completed)
+  *     case CarEvent.Failed             => Some(SagaPhase.Forward      -> SagaStepResult.Failed)
+  *     case CarEvent.Compensated        => Some(SagaPhase.Compensation -> SagaStepResult.Completed)
+  *     case CarEvent.CompensationFailed => Some(SagaPhase.Compensation -> SagaStepResult.Failed)
+  *   }
+  * }
+  * }}}
+  *
+  * Then compose the service machine into the saga's event bus:
+  * {{{
+  * def carServiceFSM[F[_]: Applicative]: Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
+  *   carStep.rmap(carStep.lmapOrEmpty(carDecider().toApparatus[F]("car")), BookingCommand.advancePrism)
+  * }}}
+  *
+  * @tparam Cmd the command type of the external service (e.g. `CarCommand`)
+  * @tparam Evt the event type of the external service (e.g. `CarEvent`)
+  * @tparam Stp the step type shared with the saga orchestrator (e.g. `BookingStep`)
+  */
 trait SagaStepAdapter[Cmd, Evt, Stp] {
+
+  /** The saga step this adapter represents. Used to filter incoming [[SagaEvent]]s. */
   def step: Stp
 
+  /** Command sent to the external service to begin the forward step. */
   def start: Cmd
+
+  /** Command sent to the external service to roll back the forward step. */
   def compensate: Cmd
 
+  /** Interprets a domain event from the external service as a saga signal.
+    *
+    * Return `Some((phase, result))` when the event is a saga-relevant
+    * acknowledgement; `None` for events the saga does not care about.
+    *
+    * @param event a raw event emitted by the external service's [[Apparatus]]
+    * @return `Some` with the phase and result, or `None` to ignore the event
+    */
   def classify(event: Evt): Option[(SagaPhase, SagaStepResult)]
 
+  /** Translates saga orchestration events into service commands (input side).
+    *
+    * Wraps a service [[Apparatus]] so it only fires when the orchestrator emits
+    * a [[SagaEvent]] that targets this step.  All other saga events produce the
+    * empty output (via `lmapOrEmpty`), leaving the service machine untouched.
+    *
+    * The resulting apparatus is labelled `"<step> event router"` so it appears
+    * clearly in Mermaid diagrams.
+    *
+    * @param apparatus the raw service machine keyed on `Cmd`
+    * @return a machine keyed on `SagaEvent[Stp]`, silent for unrelated events
+    */
   final def lmapOrEmpty[F[_], O : Monoid](apparatus: Apparatus[F, Cmd, O]): Apparatus[F, SagaEvent[Stp], O] =
       apparatus
         .lmapOrEmpty[SagaEvent[Stp]] {
@@ -47,14 +155,24 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
         }
         .label(s"${step} event router")
 
+  /** Translates service domain events into saga advance commands (output side).
+    *
+    * Wraps a service [[Apparatus]] so its `List[Evt]` output is mapped to
+    * `List[SagaCmd]` using [[classify]] and the provided [[SagaAdvancePrism]].
+    * Events for which [[classify]] returns `None` are silently dropped.
+    *
+    * Pair with [[lmapOrEmpty]] to get a fully adapted service machine:
+    * {{{
+    * carStep.rmap(carStep.lmapOrEmpty(rawMachine), advancePrism)
+    * }}}
+    *
+    * @param apparatus the machine to adapt (input type `I`, output `List[Evt]`)
+    * @param prism     the saga's advance prism used to construct saga commands
+    * @return a machine with the same input type but output `List[SagaCmd]`
+    */
   final def rmap[F[_] : Applicative, I, SagaCmd](apparatus: Apparatus[F, I, List[Evt]], prism: SagaAdvancePrism[SagaCmd, Stp]): Apparatus[F, I, List[SagaCmd]] =
     apparatus.rmap(evs => evs.flatMap((ev: Evt) => classify(ev).map((phase, result) => prism.reverseGet(step, phase, result))))
 }
-
-object SagaStepAdapter {
-  implicit def order[S : Order]: Order[SagaStepAdapter[?, ?, S]] = Order.by(_.step)
-}
-
 
 case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](startCommand: Cmd, prism: SagaAdvancePrism[Cmd, Stp], steps: NonEmptySet[Stp]) extends SagaBehavior[Cmd, Stp] {
     override val stepHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
