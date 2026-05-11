@@ -1,9 +1,67 @@
 package apparatus.core
 
 import cats.*
-import cats.implicits.*
 import cats.data.NonEmptySet
+import cats.implicits.*
+
 import scala.collection.immutable.SortedSet
+
+enum SagaPhase {
+  case Forward
+  case Compensation
+}
+
+trait Prism[S, A] {
+  def getOption(input: S): Option[A]
+  def reverseGet(input: A): S
+}
+
+type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (Stp, SagaPhase, SagaStepResult)]
+
+/**
+ * Wraps the specific commands and events from a saga step in this abstraction to
+ * - indicate the trigger/start command
+ * - indicate the compensation/rollback command
+ * - classify the events of this aggregate for the saga (the driver)
+ * - provide lmapOrEmpty and rmap transformations
+ *
+ * @tparam Cmd
+ * @tparam Evt
+ * @tparam Stp
+ */
+trait SagaStepAdapter[Cmd, Evt, Stp] {
+  def step: Stp
+
+  def start: Cmd
+  def compensate: Cmd
+
+  def classify(event: Evt): Option[(SagaPhase, SagaStepResult)]
+
+  final def lmapOrEmpty[F[_], O : Monoid](apparatus: Apparatus[F, Cmd, O]): Apparatus[F, SagaEvent[Stp], O] =
+      apparatus
+        .lmapOrEmpty[SagaEvent[Stp]] {
+          case SagaEvent.Booted(s, _) if s == step => start
+          case SagaEvent.StepStarted(s) if s == step => start
+          case SagaEvent.CompensationTriggered(s, _) if s == step => compensate
+          case SagaEvent.CompensationStarted(s) if s == step => compensate
+        }
+        .label(s"${step} event router")
+
+  final def rmap[F[_] : Applicative, I, SagaCmd](apparatus: Apparatus[F, I, List[Evt]], prism: SagaAdvancePrism[SagaCmd, Stp]): Apparatus[F, I, List[SagaCmd]] =
+    apparatus.rmap(evs => evs.flatMap((ev: Evt) => classify(ev).map((phase, result) => prism.reverseGet(step, phase, result))))
+}
+
+object SagaStepAdapter {
+  implicit def order[S : Order]: Order[SagaStepAdapter[?, ?, S]] = Order.by(_.step)
+}
+
+
+case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](startCommand: Cmd, prism: SagaAdvancePrism[Cmd, Stp], steps: NonEmptySet[Stp]) extends SagaBehavior[Cmd, Stp] {
+    override val stepHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
+      Function.unlift(cmd => prism.getOption(cmd).filter((_, phase, _) => phase == SagaPhase.Forward).map((stp, _, result) => (stp, result)))
+    override val compensationHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
+      Function.unlift(cmd => prism.getOption(cmd).filter((_, phase, _) => phase == SagaPhase.Compensation).map((stp, _, result) => (stp, result)))
+}
 
 /** Lifecycle state of a saga.
   *
