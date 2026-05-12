@@ -3,6 +3,7 @@ package apparatus.tests
 import apparatus.core.*
 import apparatus.examples.*
 import cats.Id
+import cats.data.NonEmptySet
 import cats.implicits.*
 
 import scala.collection.immutable.SortedSet
@@ -15,7 +16,7 @@ class MermaidSpec extends munit.FunSuite:
 
   // The booking orchestrator rehydrated to: Running(Car, todo=Set(Flight), compensation=Set(Hotel))
   val defaultBookingAtCarEvents: List[SagaEvent[BookingStep]] = List(
-    SagaEvent.Booted(BookingStep.Hotel, SortedSet(BookingStep.Car, BookingStep.Flight)),
+    SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
     SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
     SagaEvent.StepStarted(BookingStep.Car)
   )

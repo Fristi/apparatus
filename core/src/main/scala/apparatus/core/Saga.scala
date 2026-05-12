@@ -148,9 +148,7 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
   final def lmapOrEmpty[F[_], O : Monoid](apparatus: Apparatus[F, Cmd, O]): Apparatus[F, SagaEvent[Stp], O] =
       apparatus
         .lmapOrEmpty[SagaEvent[Stp]] {
-          case SagaEvent.Booted(s, _) if s == step => start
           case SagaEvent.StepStarted(s) if s == step => start
-          case SagaEvent.CompensationTriggered(s, _) if s == step => compensate
           case SagaEvent.CompensationStarted(s) if s == step => compensate
         }
         .label(s"${step} event router")
@@ -186,10 +184,13 @@ case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](startCommand: Cmd, 
   * A saga moves through the following states:
   *
   * {{{
-  * Waiting ──(Boot)──► Running ──(all steps complete)──► Succeeded
-  *                        │
-  *                        └──(step fails)──► Compensating ──(all compensations done)──► Failed
+  * Waiting ──(Boot)──► Prepared ──(StepStarted)──► Running ──(all steps complete)──► Succeeded
+  *                                                      │
+  *                                          (step fails)──► CompensationPrepared ──(CompensationStarted)──► Compensating ──(all compensations done)──► Failed
   * }}}
+  *
+  * `Prepared` and `CompensationPrepared` are brief intermediate states that record which steps
+  * are scheduled before the first dispatch event (`StepStarted` / `CompensationStarted`) fires.
   *
   * @tparam Step the step type, which must have `Order`, `Eq`, and `Show` instances
   */
@@ -200,8 +201,14 @@ object SagaState {
   /** Initial state. The saga has not been started yet. */
   case class Waiting[Step]() extends SagaState[Step]
 
+  /** Steps have been scheduled; awaiting dispatch of the first [[SagaEvent.StepStarted]]. */
+  case class Prepared[Step](steps: NonEmptySet[Step]) extends SagaState[Step]
+
   /** All forward steps completed successfully. */
   case class Succeeded[Step]() extends SagaState[Step]
+
+  /** Compensation steps scheduled; awaiting dispatch of the first [[SagaEvent.CompensationStarted]]. */
+  case class CompensationPrepared[Step](steps: NonEmptySet[Step]) extends SagaState[Step]
 
   /** Compensation finished (regardless of individual step outcomes). */
   case class Failed[Step]() extends SagaState[Step]
@@ -233,8 +240,8 @@ enum SagaStepResult { case Completed, Failed }
   * @tparam Step the step type
   */
 enum SagaEvent[Step]:
-  /** The saga was started. `startStep` is the first step to execute; `todo` is the remaining set. */
-  case Booted(startStep: Step, todo: SortedSet[Step])
+  /** The saga was started. `steps` is the full ordered set of forward steps to execute. */
+  case Booted(steps: NonEmptySet[Step])
 
   /** A forward step has been dispatched to the external service. */
   case StepStarted(name: Step)
@@ -242,8 +249,8 @@ enum SagaEvent[Step]:
   /** An external service reported the result of a forward step. */
   case StepProgressed(name: Step, result: SagaStepResult)
 
-  /** A forward step failed; compensation begins at `startStep` working through `todo`. */
-  case CompensationTriggered(startStep: Step, todo: SortedSet[Step])
+  /** A forward step failed; compensation will proceed through `steps` in order. */
+  case CompensationTriggered(steps: NonEmptySet[Step])
 
   /** A compensation step has been dispatched to the external service. */
   case CompensationStarted(name: Step)
@@ -302,14 +309,15 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
   /** Pure decision function: maps `(state, command)` → list of [[SagaEvent]]s.
     *
     * Rules:
-    *   - `Waiting`     — emits [[SagaEvent.Booted]] only when `cmd == startCommand`
-    *   - `Running`     — delegates to [[stepHandler]]; on `Completed` advances to next step,
-    *                     on `Failed` triggers compensation via [[SagaEvent.CompensationTriggered]]
-    *   - `Compensating`— delegates to [[compensationHandler]]; advances through compensation steps
-    *   - `Succeeded` / `Failed` — always emits `Nil`
+    *   - `Waiting`              — emits [[SagaEvent.Booted]] + [[SagaEvent.StepStarted]] when `cmd == startCommand`
+    *   - `Running`              — delegates to [[stepHandler]]; on `Completed` advances to next step via `StepStarted`,
+    *                             on `Failed` emits `CompensationTriggered` + `CompensationStarted` for the compensation set
+    *   - `Compensating`        — delegates to [[compensationHandler]]; advances through compensation steps
+    *   - `Prepared` / `CompensationPrepared` / `Succeeded` / `Failed` — always emits `Nil`
     */
   final def decide(state: SagaState[Step], cmd: Cmd): List[SagaEvent[Step]] = state match {
-    case SagaState.Waiting() => if(cmd == startCommand) List(SagaEvent.Booted(steps.head, steps.tail)) else Nil
+    case SagaState.Waiting() =>
+      if(cmd == startCommand) List(SagaEvent.Booted(steps), SagaEvent.StepStarted(steps.head)) else Nil
     case SagaState.Running(current, todo, compensation) =>
       stepHandler.unapply(cmd) match {
         case Some((stepName, result)) =>
@@ -323,13 +331,13 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
             case SagaStepResult.Failed =>
               if(current === stepName) {
                 val progressEvent: List[SagaEvent[Step]] = List(SagaEvent.StepProgressed(stepName, result))
-                val triggeredEvent: List[SagaEvent[Step]] = compensation.headOption.map(step => SagaEvent.CompensationTriggered(step, compensation.tail)).toList
-
-                progressEvent  ++ triggeredEvent
+                val compEvents: List[SagaEvent[Step]] = NonEmptySet.fromSet(compensation).toList.flatMap { cs =>
+                  List(SagaEvent.CompensationTriggered(cs), SagaEvent.CompensationStarted(cs.head))
+                }
+                progressEvent ++ compEvents
               } else {
                 Nil
               }
-
           }
         case None => Nil
       }
@@ -366,7 +374,12 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     state match {
       case SagaState.Waiting() =>
         evt match {
-          case SagaEvent.Booted(startStep, todo) => SagaState.Running(startStep, todo, SortedSet.empty)
+          case SagaEvent.Booted(steps) => SagaState.Prepared(steps)
+          case _ => state
+        }
+      case SagaState.Prepared(steps) =>
+        evt match {
+          case SagaEvent.StepStarted(_) => SagaState.Running(steps.head, steps.tail, SortedSet.empty)
           case _ => state
         }
       case SagaState.Running(_, todo, compensation) =>
@@ -374,8 +387,13 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
           case SagaEvent.StepProgressed(name, SagaStepResult.Completed) =>
             if todo.isEmpty then SagaState.Succeeded()
             else SagaState.Running(todo.head, todo.tail, compensation + name)
-          case SagaEvent.CompensationTriggered(startStep, compensTodo) =>
-            SagaState.Compensating(startStep, compensTodo)
+          case SagaEvent.CompensationTriggered(steps) =>
+            SagaState.CompensationPrepared(steps)
+          case _ => state
+        }
+      case SagaState.CompensationPrepared(steps) =>
+        evt match {
+          case SagaEvent.CompensationStarted(_) => SagaState.Compensating(steps.head, steps.tail)
           case _ => state
         }
       case SagaState.Compensating(_, todo) =>
@@ -385,7 +403,6 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
             else SagaState.Compensating(todo.head, todo.tail)
           case _ => state
         }
-
       case _ => state
     }
 
