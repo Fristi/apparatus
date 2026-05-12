@@ -27,7 +27,7 @@ The booking saga example already bakes labels into every service machine and the
 so `saga()` produces a fully annotated network:
 
 ```scala mdoc:silent
-val diagram = Mermaid.print(saga())
+val diagram = Mermaid.print(saga[Id]())
 ```
 
 Label semantics depend on what the node is:
