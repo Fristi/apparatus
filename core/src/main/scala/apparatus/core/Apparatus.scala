@@ -3,6 +3,7 @@ package apparatus.core
 import cats.*
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
+import zio.blocks.schema.Schema
 
 /** Composable, immutable finite-state machine running in effect `F`.
   *
@@ -60,7 +61,7 @@ import cats.implicits.*
 sealed trait Apparatus[F[_], I, O] { outer =>
 
   /** Advance the machine by one input, returning output and the updated machine. */
-  def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])]
+  def runWith(input: I, materializer: DeciderMaterializer[F])(using Monad[F]): F[(O, Apparatus[F, I, O])]
 
   /** Transform the effect type via a natural transformation. */
   def mapK[G[_]](f: F ~> G): Apparatus[G, I, O]
@@ -79,10 +80,10 @@ extension [F[_], A, B](left: Apparatus[F, A, B]) {
 
   def tap[C](right: Apparatus[F, B, C]): Apparatus[F, A, B] =
     new Apparatus[F, A, B]:
-      def runWith(input: A)(using Monad[F]): F[(B, Apparatus[F, A, B])] =
+      def runWith(input: A, materializer: DeciderMaterializer[F])(using Monad[F]): F[(B, Apparatus[F, A, B])] =
         for
-          (b, l2) <- left.runWith(input)
-          (_, r2) <- right.runWith(b)
+          (b, l2) <- left.runWith(input, materializer)
+          (_, r2) <- right.runWith(b, materializer)
         yield (b, l2.tap(r2))
 
       def mapK[G[_]](f: F ~> G): Apparatus[G, A, B] =
@@ -161,9 +162,6 @@ extension [F[_], M[_], A, B](left: Apparatus[F, A, M[B]]) {
   def feedback(right: Apparatus[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): Apparatus[F, A, M[B]] =
     Apparatus.Feedback(left, right)
 
-  def <->(right: Apparatus[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): Apparatus[F, A, M[B]] =
-    feedback(right)
-
   /** Like [[feedback]] but the entry point accepts `M[A]` (a collection) rather than a single `A`.
     *
     * Use when composing a sub-machine (whose output is already `M[A]`) with a feedback reactor,
@@ -175,13 +173,31 @@ extension [F[_], M[_], A, B](left: Apparatus[F, A, M[B]]) {
 
 object Apparatus:
 
+  
+  case class DeciderMachine[F[_], S, I, O](id: String, decider: Decider[S, I, List[O]])(implicit S: Schema[O]) extends Apparatus[F, I, List[O]]:
+    /** Advance the machine by one input, returning output and the updated machine. */
+    override def runWith(input: I, materializer: DeciderMaterializer[F])(using Monad[F]): F[(List[O], Apparatus[F, I, List[O]])] =
+      materializer.materialize(decider, id).flatMap(machine => machine.step(input).map((o, s) => (o, DeciderMachine[F, S, I, O](id, decider.copy(state = s.asInstanceOf[S])))))
+
+    /** Transform the effect type via a natural transformation. */
+    override def mapK[G[_]](f: F ~> G): Apparatus[G, I, List[O]] = DeciderMachine(id, decider)
+
+    /** Replace [[Apparatus.Stable]] nodes whose id appears in `registry` with the
+     * updated machine from `registry`.  Each subclass implements this using its
+     * own captured given instances so that `Feedback`/`FeedbackMany` can rebuild
+     * themselves without requiring the instances to be re-summoned.
+     */
+    override private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, List[O]] =
+      registry.get(id).fold(this)(m => Stable(id, m.asInstanceOf[BaseMachineT[F, I, List[O]]]))
+
+
   /** Wraps a single [[BaseMachineT]], threading its internal state across steps.
     *
     * Each `Fresh` node evolves **independently** — it never shares state with any
     * other node, even if constructed from the same [[BaseMachineT]] value.
     */
   case class Fresh[F[_], I, O](machine: BaseMachineT[F, I, O]) extends Apparatus[F, I, O]:
-    def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
+    def runWith(input: I, materializer: DeciderMaterializer[F])(using Monad[F]): F[(O, Apparatus[F, I, O])] =
       machine.step(input).map((o, s) => (o, Fresh(BaseMachineT(s, (s, i) => machine.action(s, i)))))
     def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Fresh(machine.mapK(f))
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O] = this
@@ -198,7 +214,7 @@ object Apparatus:
     * Nodes with **different** ids, or [[Fresh]] nodes, are always independent.
     */
   case class Stable[F[_], I, O](id: String, machine: BaseMachineT[F, I, O]) extends Apparatus[F, I, O]:
-    def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
+    def runWith(input: I, materializer: DeciderMaterializer[F])(using Monad[F]): F[(O, Apparatus[F, I, O])] =
       machine.step(input).map((o, s) => (o, Stable(id, BaseMachineT(s, (s, i) => machine.action(s, i)))))
     def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Stable(id, machine.mapK(f))
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O] =
@@ -211,12 +227,12 @@ object Apparatus:
     * nodes (same id) see the state advanced by `left`.
     */
   case class Sequential[F[_], A, B, C](left: Apparatus[F, A, B], right: Apparatus[F, B, C]) extends Apparatus[F, A, C]:
-    def runWith(input: A)(using Monad[F]): F[(C, Apparatus[F, A, C])] =
+    def runWith(input: A, materializer: DeciderMaterializer[F])(using Monad[F]): F[(C, Apparatus[F, A, C])] =
       for
-        (o1, l2) <- run(left, input)
+        (o1, l2) <- run(left, input, materializer)
         stable    = collectStable(l2)
         patched   = if stable.nonEmpty then right.patchStableNodes(stable) else right
-        (o2, r2) <- run(patched, o1)
+        (o2, r2) <- run(patched, o1, materializer)
       yield (o2, Sequential(l2, r2))
     def mapK[G[_]](f: F ~> G): Apparatus[G, A, C] = Sequential(left.mapK(f), right.mapK(f))
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, A, C] =
@@ -224,10 +240,10 @@ object Apparatus:
 
   /** Runs `left` and `right` independently on the two halves of a pair. */
   case class Parallel[F[_], A, B, C, D](left: Apparatus[F, A, B], right: Apparatus[F, C, D]) extends Apparatus[F, (A, C), (B, D)]:
-    def runWith(input: (A, C))(using Monad[F]): F[((B, D), Apparatus[F, (A, C), (B, D)])] =
+    def runWith(input: (A, C), materializer: DeciderMaterializer[F])(using Monad[F]): F[((B, D), Apparatus[F, (A, C), (B, D)])] =
       for
-        (o1, l2) <- run(left, input._1)
-        (o2, r2) <- run(right, input._2)
+        (o1, l2) <- run(left, input._1, materializer)
+        (o2, r2) <- run(right, input._2, materializer)
       yield ((o1, o2), Parallel(l2, r2))
     def mapK[G[_]](f: F ~> G): Apparatus[G, (A, C), (B, D)] = Parallel(left.mapK(f), right.mapK(f))
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, (A, C), (B, D)] =
@@ -237,10 +253,10 @@ object Apparatus:
     * machine keeps its state untouched.
     */
   case class Alternative[F[_], A, B, C, D](left: Apparatus[F, A, B], right: Apparatus[F, C, D]) extends Apparatus[F, Either[A, C], Either[B, D]]:
-    def runWith(input: Either[A, C])(using Monad[F]): F[(Either[B, D], Apparatus[F, Either[A, C], Either[B, D]])] =
+    def runWith(input: Either[A, C], materializer: DeciderMaterializer[F])(using Monad[F]): F[(Either[B, D], Apparatus[F, Either[A, C], Either[B, D]])] =
       input match
-        case Left(l)  => run(left, l).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
-        case Right(r) => run(right, r).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
+        case Left(l)  => run(left, l, materializer).map  { case (o, l2) => (Left(o),  Alternative(l2, right)) }
+        case Right(r) => run(right, r, materializer).map { case (o, r2) => (Right(o), Alternative(left, r2)) }
     def mapK[G[_]](f: F ~> G): Apparatus[G, Either[A, C], Either[B, D]] = Alternative(left.mapK(f), right.mapK(f))
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, Either[A, C], Either[B, D]] =
       Alternative(left.patchStableNodes(registry), right.patchStableNodes(registry))
@@ -261,16 +277,16 @@ object Apparatus:
   case class Feedback[F[_], A, B, N[_]](left: Apparatus[F, A, N[B]], right: Apparatus[F, B, N[A]])(
     using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]
   ) extends Apparatus[F, A, N[B]]:
-    def runWith(a: A)(using Monad[F]): F[(N[B], Apparatus[F, A, N[B]])] =
+    def runWith(a: A, materializer: DeciderMaterializer[F])(using Monad[F]): F[(N[B], Apparatus[F, A, N[B]])] =
       def loop(lf: Apparatus[F, A, N[B]], rf: Apparatus[F, B, N[A]], pending: List[A], acc: N[B]): F[(N[B], Apparatus[F, A, N[B]])] =
         pending match
           case Nil => (acc, Feedback(lf, rf)).pure[F]
           case head :: tail =>
             for
-              (nb, lf2) <- run(lf, head)
+              (nb, lf2) <- run(lf, head, materializer)
               (na, rf2) <- foldN.toList(nb).foldLeftM((monoidNA.empty, rf)):
                              case ((naAcc, rf0), b) =>
-                               run(rf0, b).map { case (na2, rf1) => (monoidNA.combine(naAcc, na2), rf1) }
+                               run(rf0, b, materializer).map { case (na2, rf1) => (monoidNA.combine(naAcc, na2), rf1) }
               result    <- loop(lf2, rf2, foldN.toList(na) ++ tail, monoidNB.combine(acc, nb))
             yield result
       loop(left, right, List(a), monoidNB.empty)
@@ -289,16 +305,16 @@ object Apparatus:
   case class FeedbackMany[F[_], A, B, N[_]](left: Apparatus[F, A, N[B]], right: Apparatus[F, B, N[A]])(
     using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]
   ) extends Apparatus[F, N[A], N[B]]:
-    def runWith(nas: N[A])(using Monad[F]): F[(N[B], Apparatus[F, N[A], N[B]])] =
+    def runWith(nas: N[A], materializer: DeciderMaterializer[F])(using Monad[F]): F[(N[B], Apparatus[F, N[A], N[B]])] =
       def loop(lf: Apparatus[F, A, N[B]], rf: Apparatus[F, B, N[A]], pending: List[A], acc: N[B]): F[(N[B], Apparatus[F, N[A], N[B]])] =
         pending match
           case Nil => (acc, FeedbackMany(lf, rf)).pure[F]
           case head :: tail =>
             for
-              (nb, lf2) <- run(lf, head)
+              (nb, lf2) <- run(lf, head, materializer)
               (na, rf2) <- foldN.toList(nb).foldLeftM((monoidNA.empty, rf)):
                              case ((naAcc, rf0), b) =>
-                               run(rf0, b).map { case (na2, rf1) => (monoidNA.combine(naAcc, na2), rf1) }
+                               run(rf0, b, materializer).map { case (na2, rf1) => (monoidNA.combine(naAcc, na2), rf1) }
               result    <- loop(lf2, rf2, foldN.toList(na) ++ tail, monoidNB.combine(acc, nb))
             yield result
       loop(left, right, foldN.toList(nas), monoidNB.empty)
@@ -310,9 +326,9 @@ object Apparatus:
     * when the function is undefined for the given input.
     */
   case class LmapOrEmpty[F[_], A, B, C](inner: Apparatus[F, A, B], pf: PartialFunction[C, A], mb: Monoid[B]) extends Apparatus[F, C, B]:
-    def runWith(input: C)(using Monad[F]): F[(B, Apparatus[F, C, B])] =
+    def runWith(input: C, materializer: DeciderMaterializer[F])(using Monad[F]): F[(B, Apparatus[F, C, B])] =
       pf.lift(input) match
-        case Some(a) => inner.runWith(a).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
+        case Some(a) => inner.runWith(a, materializer).map((b, m2) => (b, LmapOrEmpty(m2, pf, mb)))
         case None    => (mb.empty, this).pure[F]
     def mapK[G[_]](f: F ~> G): Apparatus[G, C, B] = LmapOrEmpty(inner.mapK(f), pf, mb)
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, C, B] =
@@ -322,10 +338,10 @@ object Apparatus:
     * Both machines advance state independently on every step.
     */
   case class Merged[F[_], A, B](left: Apparatus[F, A, B], right: Apparatus[F, A, B], mb: Monoid[B]) extends Apparatus[F, A, B]:
-    def runWith(input: A)(using Monad[F]): F[(B, Apparatus[F, A, B])] =
+    def runWith(input: A, materializer: DeciderMaterializer[F])(using Monad[F]): F[(B, Apparatus[F, A, B])] =
       for
-        (b1, l2) <- run(left, input)
-        (b2, r2) <- run(right, input)
+        (b1, l2) <- run(left, input, materializer)
+        (b2, r2) <- run(right, input, materializer)
       yield (mb.combine(b1, b2), Merged(l2, r2, mb))
     def mapK[G[_]](f: F ~> G): Apparatus[G, A, B] = Merged(left.mapK(f), right.mapK(f), mb)
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, A, B] =
@@ -335,8 +351,8 @@ object Apparatus:
     * On a [[Fresh]] or [[Stable]] it renames the node; on composites it wraps in a subgraph.
     */
   case class Labeled[F[_], I, O](inner: Apparatus[F, I, O], name: String) extends Apparatus[F, I, O]:
-    def runWith(input: I)(using Monad[F]): F[(O, Apparatus[F, I, O])] =
-      inner.runWith(input).map((o, m2) => (o, Labeled(m2, name)))
+    def runWith(input: I, materializer: DeciderMaterializer[F])(using Monad[F]): F[(O, Apparatus[F, I, O])] =
+      inner.runWith(input, materializer).map((o, m2) => (o, Labeled(m2, name)))
     def mapK[G[_]](f: F ~> G): Apparatus[G, I, O] = Labeled(inner.mapK(f), name)
     private[core] def patchStableNodes(registry: Map[String, Any]): Apparatus[F, I, O] =
       Labeled(inner.patchStableNodes(registry), name)
@@ -346,20 +362,20 @@ object Apparatus:
     Apparatus.Fresh(BaseMachineT.stateless[F, A, A](_.pure))
 
   /** Run a single step, returning output and the updated machine. */
-  def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I): F[(O, Apparatus[F, I, O])] =
-    fsm.runWith(input)
+  def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, materializer: DeciderMaterializer[F]): F[(O, Apparatus[F, I, O])] =
+    fsm.runWith(input, materializer)
 
-  def runA[F[_] : Monad, I, O](fsm: Apparatus[F, I, O], input: I): F[O] =
-    run(fsm, input).map((x, _) => x)
+  def runA[F[_] : Monad, I, O](fsm: Apparatus[F, I, O], input: I, materializer: DeciderMaterializer[F]): F[O] =
+    run(fsm, input, materializer).map((x, _) => x)
 
   /** Fold over a collection of inputs, combining outputs via `Monoid[O]`. */
-  def runMultiple[F[_]: Monad, M[_]: Foldable, I, O: Monoid](fsm: Apparatus[F, I, O], entries: M[I]): F[(O, Apparatus[F, I, O])] =
+  def runMultiple[F[_]: Monad, M[_]: Foldable, I, O: Monoid](fsm: Apparatus[F, I, O], entries: M[I], materializer: DeciderMaterializer[F]): F[(O, Apparatus[F, I, O])] =
     entries.foldM((Monoid[O].empty, fsm)) { case ((acc, m), i) =>
-      run(m, i).map((o, nm) => (acc |+| o, nm))
+      run(m, i, materializer).map((o, nm) => (acc |+| o, nm))
     }
 
-  def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](fsm: Apparatus[F, I, O], entries: M[I]): F[O] =
-    runMultiple(fsm, entries).map((x, _) => x)
+  def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](fsm: Apparatus[F, I, O], entries: M[I], materializer: DeciderMaterializer[F]): F[O] =
+    runMultiple(fsm, entries, materializer).map((x, _) => x)
 
   /** `Category` instance: `id` is [[identity]], `compose` is [[andThen]] (reversed). */
   implicit def category[F[_] : Applicative]: Category[[I, O] =>> Apparatus[F, I, O]] =

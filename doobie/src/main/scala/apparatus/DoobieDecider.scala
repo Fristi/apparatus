@@ -2,8 +2,8 @@ package apparatus
 
 import apparatus.core.*
 import doobie.free.connection
-import doobie.{Read, Write}
 import doobie.free.connection.ConnectionIO
+import zio.blocks.schema.*
 
 import java.util.UUID
 
@@ -11,44 +11,37 @@ import java.util.UUID
 final case class EventEntry[O](sequenceNr: Int, body: O)
 
 /** Persistence interface for an append-only aggregate event stream. */
-trait EventStore[F[_], O]:
+trait EventStore[F[_]]:
   def create(): F[Int]
   /** Acquire an advisory lock for `id`; returns `false` if already held. */
-  def lockAggregate(id: UUID): F[Boolean]
+  def lockAggregate(networkId: String, aggregateId: UUID): F[Boolean]
   /** Load all stored events for `id` in sequence-number order. */
-  def loadAggregateStream(id: UUID): F[List[EventEntry[O]]]
+  def loadAggregateStream[O: Schema](networkId: String, aggregateId: UUID): F[List[EventEntry[O]]]
   /** Append `events` to the stream for `id`; returns the row count inserted. */
-  def appendAggregateStream(id: UUID, events: List[EventEntry[O]]): F[Int]
+  def appendAggregateStream[O: Schema](networkId: String, aggregateId: UUID, events: List[EventEntry[O]]): F[Int]
 
+object EventStore {
+  def deciderMaterializer(eventStore: EventStore[ConnectionIO], aggregateId: UUID): DeciderMaterializer[ConnectionIO] =
+    new DeciderMaterializer[ConnectionIO] {
+      override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): ConnectionIO[BaseMachineT[ConnectionIO, I, List[O]]] =
+        for {
+          acquired <- eventStore.lockAggregate(networkId, aggregateId)
+          _ <- if (!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
+          events <- eventStore.loadAggregateStream(networkId, aggregateId)
+          evolvedDecider = apparatus.evolveFrom(events.map(_.body))
+        } yield {
+          val nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
 
-extension [S, I, O : {Read, Write}](decider: Decider[S, I, List[O]]) {
-  /** Build a transactional [[Apparatus]] for aggregate `id`.
-    *
-    * Within a single `ConnectionIO` transaction this will:
-    *   1. Acquire an advisory lock on `id` (raises on failure).
-    *   2. Load and replay the existing event stream to restore state.
-    *   3. Return a [[Apparatus.Fresh]] whose `action` decides, appends, and evolves atomically.
-    */
-  def transactionalDecider(id: UUID): ConnectionIO[Apparatus[ConnectionIO, I, List[O]]] =
-    for {
-      store = PostgresEventStore[O]()
-      acquired <- store.lockAggregate(id)
-      _ <- if(!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
-      events <- store.loadAggregateStream(id)
-      evolvedDecider = decider.evolveFrom(events.map(_.body))
-    } yield {
-      val nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
-      val baseMachineT = new BaseMachineT[ConnectionIO, I, List[O]] {
-        override type State = S
-        override def initialState: S = evolvedDecider.state
-        override def action(state: State, input: I): ConnectionIO[(List[O], State)] =
-          val o = evolvedDecider.decide(input, state)
-          val eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
-          val ns = evolvedDecider.evolve(o, state)
+          new BaseMachineT[ConnectionIO, I, List[O]] {
+            override type State = S
+            override def initialState: S = evolvedDecider.state
+            override def action(state: State, input: I): ConnectionIO[(List[O], State)] =
+              val o = evolvedDecider.decide(input, state)
+              val eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
+              val ns = evolvedDecider.evolve(o, state)
 
-          store.appendAggregateStream(id, eventStreamToAppend).map(_ => (o, ns))
-      }
-
-      Apparatus.Fresh(baseMachineT)
+              eventStore.appendAggregateStream(networkId, aggregateId, eventStreamToAppend).map(_ => (o, ns))
+          }
+        }
     }
 }

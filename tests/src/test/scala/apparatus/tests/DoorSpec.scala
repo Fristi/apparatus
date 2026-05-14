@@ -73,7 +73,7 @@ def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
   door.toApparatus[Id]("door") >>> Apparatus.Fresh(doorProject)
 
 def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): (O, Apparatus[Id, DoorCommand, O]) =
-  Apparatus.runMultiple(fsm, cmds)
+  Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)
 
 // --- Tests ---
 

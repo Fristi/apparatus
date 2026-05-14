@@ -1,5 +1,6 @@
 package apparatus.tests
 
+import apparatus.given
 import apparatus.*
 import apparatus.core.*
 import apparatus.examples.*
@@ -41,12 +42,17 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
 
   val createSchema: ConnectionIO[Unit] =
     for
-      _ <- PostgresEventStore[BankAccountEvent]().create()
+      _ <- PostgresEventStore.create()
       _ <- DoobieBankAccountTransactionRepository.create()
     yield ()
 
+  def decider[F[_]]: Apparatus[F, BankAccountCommand, List[BankAccountEvent]] = 
+    Apparatus.DeciderMachine("bank-account", bankAccount)
+  
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] =
-    bankAccount.transactionalDecider(id).flatMap(x => Apparatus.runA(x.tap(transactionsProjection(id, DoobieBankAccountTransactionRepository)), cmd)).transact(xa)
+    val prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] = decider[ConnectionIO].tap(transactionsProjection(id, DoobieBankAccountTransactionRepository))
+    val deciderMaterializer = EventStore.deciderMaterializer(PostgresEventStore, id)
+    Apparatus.runA(prg, cmd, deciderMaterializer).transact(xa)
 
   test("open account emits Opened") {
     withContainers { c =>

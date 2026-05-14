@@ -1,7 +1,8 @@
 package apparatus.core
 
-import cats.{Applicative, MonadError}
+import cats.{Applicative, Id, MonadError}
 import cats.implicits.*
+import zio.blocks.schema.Schema
 
 /** Pure, effect-free state machine following the Decider pattern.
  *
@@ -22,24 +23,7 @@ import cats.implicits.*
  * @param evolve pure function `(output, state) => newState`
  */
 final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) => S) { self =>
-
-  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = {
-    val baseMachine =
-      new BaseMachineT[F, I, O]:
-        override type State = S
-
-        override def initialState: S = self.state
-
-        override def action(state: State, input: I): F[(O, State)] =
-          val o = self.decide(input, state)
-          val ns = self.evolve(o, state)
-          (o, ns).pure
-          
-    Apparatus.Stable(id, baseMachine)
-  }
-  
-  /** Lift into [[BaseMachineT]] under effect `F`, running `decide` then `evolve` per step. */
-  def toBaseMachine[F[_] : Applicative]: BaseMachineT[F, I, O] =
+  def toBaseMachineT[F[_] : Applicative]: BaseMachineT[F, I, O] {type State = S} =
     new BaseMachineT[F, I, O]:
       override type State = S
 
@@ -49,6 +33,10 @@ final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) 
         val o = self.decide(input, state)
         val ns = self.evolve(o, state)
         (o, ns).pure
+
+  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = {
+    Apparatus.Stable(id, toBaseMachineT)
+  }
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
@@ -116,4 +104,14 @@ extension [S, E, I, O](decider: Decider[S, I, Either[E, List[O]]]) {
           ns = decider.evolve(Right(o), state)
         } yield (o, ns)
     }
+}
+
+trait DeciderMaterializer[F[_]] {
+  def materialize[S, I, O : Schema](apparatus: Decider[S, I, List[O]], networkId: String): F[BaseMachineT[F, I, List[O]]]
+}
+
+object DeciderMaterializer {
+  val id: DeciderMaterializer[Id] = new DeciderMaterializer[Id] {
+    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[BaseMachineT[Id, I, List[O]]] = apparatus.toBaseMachineT[Id]
+  }
 }
