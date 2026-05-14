@@ -8,7 +8,7 @@ import cats.implicits.*
 
 import scala.collection.immutable.SortedSet
 
-class BookingSagaSpec extends munit.FunSuite:
+class BookingSagaIdentitySpec extends munit.FunSuite:
   
 
   test("happy path: all steps complete in order"):

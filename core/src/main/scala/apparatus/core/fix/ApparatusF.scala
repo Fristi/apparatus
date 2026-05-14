@@ -71,10 +71,3 @@ given functor: [F[_] : Functor, I, O] => Functor[[R] =>> ApparatusF[F, I, O, R]]
     fa.map(f)
 
 opaque type Apparatus[F[_], I, O] = Fix[[R] =>> ApparatusF[F, I, O, R]]
-
-//extension [F[_], M[_], A, B](left: Apparatus[F, A, M[B]]) {
-//  def feedback(right: Apparatus[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): Apparatus[F, A, M[B]] =
-//    Fix(ApparatusF.Feedback(left, right, F, MB, MA))
-//  def feedbackMany(right: Apparatus[F, B, M[A]])(using F: Foldable[M], MB: Monoid[M[B]], MA: Monoid[M[A]]): Apparatus[F, M[A], M[B]] =
-//    Fix(ApparatusF.FeedbackMany(left, right.unfix, F, MB, MA))
-//}

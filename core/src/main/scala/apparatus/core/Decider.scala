@@ -26,17 +26,13 @@ final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) 
   def toBaseMachineT[F[_] : Applicative]: BaseMachineT[F, I, O] {type State = S} =
     new BaseMachineT[F, I, O]:
       override type State = S
-
       override def initialState: S = self.state
-
       override def action(state: State, input: I): F[(O, State)] =
         val o = self.decide(input, state)
         val ns = self.evolve(o, state)
         (o, ns).pure
 
-  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = {
-    Apparatus.Stable(id, toBaseMachineT)
-  }
+  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = Apparatus.Stable(id, toBaseMachineT)
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {

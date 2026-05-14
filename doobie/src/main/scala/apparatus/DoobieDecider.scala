@@ -28,6 +28,7 @@ object EventStore {
           acquired <- eventStore.lockAggregate(networkId, aggregateId)
           _ <- if (!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
           events <- eventStore.loadAggregateStream(networkId, aggregateId)
+          _ = println(s"events: $events")
           evolvedDecider = apparatus.evolveFrom(events.map(_.body))
         } yield {
           val nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)

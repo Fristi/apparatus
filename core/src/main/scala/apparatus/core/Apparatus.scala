@@ -177,7 +177,7 @@ object Apparatus:
   case class DeciderMachine[F[_], S, I, O](id: String, decider: Decider[S, I, List[O]])(implicit S: Schema[O]) extends Apparatus[F, I, List[O]]:
     /** Advance the machine by one input, returning output and the updated machine. */
     override def runWith(input: I, materializer: DeciderMaterializer[F])(using Monad[F]): F[(List[O], Apparatus[F, I, List[O]])] =
-      materializer.materialize(decider, id).flatMap(machine => machine.step(input).map((o, s) => (o, DeciderMachine[F, S, I, O](id, decider.copy(state = s.asInstanceOf[S])))))
+      materializer.materialize(decider, id).flatMap(machine => machine.step(input).map((o, _) => (o, DeciderMachine[F, S, I, O](id, decider))))
 
     /** Transform the effect type via a natural transformation. */
     override def mapK[G[_]](f: F ~> G): Apparatus[G, I, List[O]] = DeciderMachine(id, decider)
@@ -421,6 +421,7 @@ object Apparatus:
   private[core] def collectStable[F[_], I, O](app: Apparatus[F, I, O]): Map[String, Any] =
     app match
       case Stable(id, m)           => Map(id -> m)
+      case DeciderMachine(id, m)           => Map(id -> m)
       case Sequential(l, r)        => collectStable(l) ++ collectStable(r)
       case Parallel(l, r)          => collectStable(l) ++ collectStable(r)
       case Alternative(l, r)       => collectStable(l) ++ collectStable(r)
