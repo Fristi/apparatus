@@ -62,6 +62,22 @@ object ApparatusF:
     def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, N[A], N[B]] =
       FeedbackMany(nt(left), nt(right), foldN, monoidNB, monoidNA)
 
+  final case class LmapOrEmpty[F[_, _], A, B, C](
+                                                   inner: F[A, B],
+                                                   pf:    PartialFunction[C, A],
+                                                   mb:    Monoid[B]
+                                                 ) extends ApparatusF[F, C, B]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, C, B] =
+      LmapOrEmpty(nt(inner), pf, mb)
+
+  final case class Merged[F[_, _], A, B](
+                                          left:  F[A, B],
+                                          right: F[A, B],
+                                          mb:    Monoid[B]
+                                        ) extends ApparatusF[F, A, B]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, A, B] =
+      Merged(nt(left), nt(right), mb)
+
   final case class Labeled[F[_, _], I, O](
                                            inner: F[I, O],
                                            name:  String
@@ -107,6 +123,12 @@ object Apparatus {
                               )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[N[A], N[B]] =
     HFix2(ApparatusF.FeedbackMany(left, right, foldN, monoidNB, monoidNA))
 
+  def lmapOrEmpty[A, B, C](inner: Apparatus[A, B], pf: PartialFunction[C, A])(using mb: Monoid[B]): Apparatus[C, B] =
+    HFix2(ApparatusF.LmapOrEmpty(inner, pf, mb))
+
+  def merged[A, B](left: Apparatus[A, B], right: Apparatus[A, B])(using mb: Monoid[B]): Apparatus[A, B] =
+    HFix2(ApparatusF.Merged(left, right, mb))
+
   def labeled[I, O](name: String)(inner: Apparatus[I, O]): Apparatus[I, O] =
-    HFix2(ApparatusF.Labeled(inner, name)) 
+    HFix2(ApparatusF.Labeled(inner, name))
 }

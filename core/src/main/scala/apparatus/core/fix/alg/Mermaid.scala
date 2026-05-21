@@ -100,6 +100,26 @@ object Mermaid:
         ctx.edge(rOut, lIn, "N[A] ↺")
         (lIn, lOut)
 
+      case ApparatusF.LmapOrEmpty(inner, _, _) =>
+        val guardId = ctx.fresh("guard")
+        ctx.node(guardId, "lmapOrEmpty", Shape.Diamond)
+        val (iIn, iOut) = render(inner, ctx)
+        ctx.edge(guardId, iIn, "Some")
+        (guardId, iOut)
+
+      case ApparatusF.Merged(left, right, _) =>
+        val fanId  = ctx.fresh("fan")
+        val joinId = ctx.fresh("join")
+        ctx.node(fanId,  "fan",  Shape.Stadium)
+        ctx.node(joinId, "merge", Shape.Stadium)
+        val (lIn, lOut) = render(left, ctx)
+        val (rIn, rOut) = render(right, ctx)
+        ctx.edge(fanId, lIn)
+        ctx.edge(fanId, rIn)
+        ctx.edge(lOut, joinId)
+        ctx.edge(rOut, joinId)
+        (fanId, joinId)
+
       // Label directly on a leaf — rename the node box rather than wrapping in subgraph
       case ApparatusF.Labeled(inner, name) if isLeaf(inner) =>
         val id = ctx.fresh("node")

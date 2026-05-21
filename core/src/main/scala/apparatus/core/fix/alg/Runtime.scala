@@ -32,6 +32,16 @@ private def evalAlg[F[_] : Monad]: HAlgebra2[ApparatusF, [I, O] =>> CompiledNetw
     case ApparatusF.FeedbackMany(left, right, foldN, monoidNB, monoidNA) =>
       feedbackManyLoop(left, right, foldN, monoidNB)
 
+    case ApparatusF.LmapOrEmpty(inner, pf, mb) =>
+      Kleisli { c =>
+        pf.lift(c) match
+          case Some(a) => inner.run(a)
+          case None    => mb.empty.pure[[z] =>> StateT[F, MaterializedRegistry[F], z]]
+      }
+
+    case ApparatusF.Merged(left, right, mb) =>
+      Kleisli { a => (left.run(a), right.run(a)).mapN(mb.combine) }
+
     case ApparatusF.Labeled(inner, _) =>
       inner
 

@@ -49,6 +49,12 @@ private def go[F[_] : Monad, I, O](apparatus: Apparatus[I, O]): State[Normalized
       goFeedbackMany(left, right, foldN, monoidNB, monoidNA)
         .asInstanceOf[State[NormalizedRegistry, Apparatus[I, O]]]
 
+    case ApparatusF.LmapOrEmpty(inner, pf, mb) =>
+      go(inner).map(i => HFix2(ApparatusF.LmapOrEmpty(i, pf, mb)))
+
+    case ApparatusF.Merged(left, right, mb) =>
+      (go(left), go(right)).mapN((l, r) => HFix2(ApparatusF.Merged(l, r, mb)))
+
     case ApparatusF.Labeled(inner, name) =>
       go(inner).map(i => HFix2(ApparatusF.Labeled(i, name)))
   }
