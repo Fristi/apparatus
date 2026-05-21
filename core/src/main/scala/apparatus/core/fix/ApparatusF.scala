@@ -1,6 +1,6 @@
 package apparatus.core.fix
 
-import apparatus.core.Decider
+import apparatus.core.{BaseMachineT, Decider}
 import apparatus.core.fix.HFix2
 import cats.{Foldable, Monoid}
 import zio.blocks.schema.Schema
@@ -10,16 +10,20 @@ sealed trait ApparatusF[F[_, _], I, O]:
 
 object ApparatusF:
 
-  final case class DeciderRef[F[_, _], I, O](networkId: String) extends ApparatusF[F, I, O]:
-    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] = DeciderRef(networkId)
+  final case class Ref[F[_, _], I, O](networkId: String) extends ApparatusF[F, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] = Ref(networkId)
+
+  /** Pre-built machine, stored type-erased over the effect. Cast back in Runtime. */
+  final case class BaseMachine[F[_, _], I, O](machine: BaseMachineT[[x] =>> Any, I, O]) extends ApparatusF[F, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] = BaseMachine(machine)
   
-  final case class DeciderNode[F[_, _], I, O](
-                                               networkId: String,
-                                               decider:   Decider[?, I, List[O]],
-                                               schema: Schema[O]
+  final case class DeciderMachine[F[_, _], I, O](
+                                                  networkId: String,
+                                                  decider:   Decider[?, I, List[O]],
+                                                  schema: Schema[O]
                                              ) extends ApparatusF[F, I, O]:
     def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] =
-      DeciderNode(networkId, decider, schema)
+      DeciderMachine(networkId, decider, schema)
 
   final case class Sequential[F[_, _], A, B, C](
                                                  left:  F[A, B],
@@ -102,7 +106,7 @@ type Apparatus[I, O] = HFix2[ApparatusF, I, O]
 
 object Apparatus {
   def decider[I, O](networkId: String, d: Decider[?, I, List[O]])(using S: Schema[O]): Apparatus[I, O] =
-    HFix2(ApparatusF.DeciderNode(networkId, d, S))
+    HFix2(ApparatusF.DeciderMachine(networkId, d, S))
 
   def sequential[A, B, C](left: Apparatus[A, B], right: Apparatus[B, C]): Apparatus[A, C] =
     HFix2(ApparatusF.Sequential(left, right))
@@ -128,6 +132,9 @@ object Apparatus {
 
   def merged[A, B](left: Apparatus[A, B], right: Apparatus[A, B])(using mb: Monoid[B]): Apparatus[A, B] =
     HFix2(ApparatusF.Merged(left, right, mb))
+
+  def fresh[G[_], I, O](machine: BaseMachineT[G, I, O]): Apparatus[I, O] =
+    HFix2(ApparatusF.BaseMachine(machine.asInstanceOf[BaseMachineT[[x] =>> Any, I, O]]))
 
   def labeled[I, O](name: String)(inner: Apparatus[I, O]): Apparatus[I, O] =
     HFix2(ApparatusF.Labeled(inner, name))

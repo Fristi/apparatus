@@ -44,14 +44,19 @@ object Mermaid:
   private def render[I, O](apparatus: Apparatus[I, O], ctx: Context): (String, String) =
     apparatus.unfix match
 
-      case ApparatusF.DeciderNode(networkId, _, _) =>
+      case ApparatusF.DeciderMachine(networkId, _, _) =>
         val id = ctx.fresh("node")
         ctx.node(id, networkId, Shape.Box)
         (id, id)
 
-      case ApparatusF.DeciderRef(networkId) =>
+      case ApparatusF.Ref(networkId) =>
         val id = ctx.fresh("node")
         ctx.node(id, networkId, Shape.Box)
+        (id, id)
+
+      case ApparatusF.BaseMachine(_) =>
+        val id = ctx.fresh("fresh")
+        ctx.node(id, "fresh", Shape.Box)
         (id, id)
 
       case ApparatusF.Sequential(left, right) =>
@@ -135,6 +140,7 @@ object Mermaid:
 
   private def isLeaf[I, O](apparatus: Apparatus[I, O]): Boolean =
     apparatus.unfix match
-      case _: ApparatusF.DeciderNode[?, ?, ?] => true
-      case _: ApparatusF.DeciderRef[?, ?, ?]  => true
+      case _: ApparatusF.DeciderMachine[?, ?, ?] => true
+      case _: ApparatusF.Ref[?, ?, ?]  => true
+      case _: ApparatusF.BaseMachine[?, ?, ?]       => true
       case _                                   => false

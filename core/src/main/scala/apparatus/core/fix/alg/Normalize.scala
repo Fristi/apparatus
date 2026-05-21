@@ -20,17 +20,26 @@ def normalize[F[_] : Monad, I, O](apparatus: Apparatus[I, O]): (NormalizedRegist
 private def go[F[_] : Monad, I, O](apparatus: Apparatus[I, O]): State[NormalizedRegistry, Apparatus[I, O]] =
   apparatus.unfix match {
 
-    case ApparatusF.DeciderNode(networkId, decider, schema) =>
+    case ApparatusF.DeciderMachine(networkId, decider, schema) =>
       val entry = new DeciderEntry {
         override def materialize[G[_] : Monad](m: DeciderMaterializer[G]): G[BaseMachineT[G, ?, ?]] =
           m.materialize(decider, networkId)(using schema).asInstanceOf[G[BaseMachineT[G, ?, ?]]]
       }
       
       State.modify[NormalizedRegistry](_ + (networkId -> entry))
-        .as(HFix2(ApparatusF.DeciderRef(networkId)))
+        .as(HFix2(ApparatusF.Ref(networkId)))
 
-    case ApparatusF.DeciderRef(networkId) =>
-      StateT.pure(HFix2(ApparatusF.DeciderRef(networkId)))
+    case ApparatusF.BaseMachine(machine) =>
+      val id = java.util.UUID.randomUUID().toString
+      val entry = new DeciderEntry {
+        override def materialize[G[_] : Monad](m: DeciderMaterializer[G]): G[BaseMachineT[G, ?, ?]] =
+          machine.asInstanceOf[BaseMachineT[G, I, O]].pure[G].asInstanceOf[G[BaseMachineT[G, ?, ?]]]
+      }
+      State.modify[NormalizedRegistry](_ + (id -> entry))
+        .as(HFix2(ApparatusF.Ref(id)))
+
+    case ApparatusF.Ref(networkId) =>
+      StateT.pure(HFix2(ApparatusF.Ref(networkId)))
 
     case ApparatusF.Sequential(left, right) =>
       (go(left), go(right)).mapN((l, r) => HFix2(ApparatusF.Sequential(l, r)))

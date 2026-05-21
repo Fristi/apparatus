@@ -11,8 +11,8 @@ type CompiledNetwork[F[_], I, O] = Kleisli[[z] =>> StateT[F, MaterializedRegistr
 
 private def evalAlg[F[_] : Monad]: HAlgebra2[ApparatusF, [I, O] =>> CompiledNetwork[F, I, O]] =
   [I, O] => (node: ApparatusF[[x, y] =>> CompiledNetwork[F, x, y], I, O]) => node match {
-    case ApparatusF.DeciderNode(networkId, _, _) =>
-      Kleisli(x => StateT.liftF(???.asInstanceOf[F[O]]))
+    case ApparatusF.DeciderMachine(networkId, _, _) =>
+      sys.error("Decider node reached evalAlg — normalize must be called first")
 
     case ApparatusF.Sequential(left, right) =>
       left.andThen(right)
@@ -42,10 +42,13 @@ private def evalAlg[F[_] : Monad]: HAlgebra2[ApparatusF, [I, O] =>> CompiledNetw
     case ApparatusF.Merged(left, right, mb) =>
       Kleisli { a => (left.run(a), right.run(a)).mapN(mb.combine) }
 
+    case ApparatusF.BaseMachine(_) =>
+      sys.error("Fresh node reached evalAlg — normalize must be called first")
+
     case ApparatusF.Labeled(inner, _) =>
       inner
 
-    case ApparatusF.DeciderRef(networkId) =>
+    case ApparatusF.Ref(networkId) =>
       Kleisli { input =>
         StateT { registry =>
           val machine = registry(networkId).asInstanceOf[BaseMachineT[F, I, O]]
