@@ -172,7 +172,6 @@ extension [F[_], M[_], A, B](left: Apparatus[F, A, M[B]]) {
 }
 
 object Apparatus:
-
   
   case class DeciderMachine[F[_], S, I, O](id: String, decider: Decider[S, I, List[O]])(implicit S: Schema[O]) extends Apparatus[F, I, List[O]]:
     /** Advance the machine by one input, returning output and the updated machine. */

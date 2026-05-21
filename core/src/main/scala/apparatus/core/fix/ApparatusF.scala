@@ -1,73 +1,112 @@
 package apparatus.core.fix
 
-import apparatus.core.{Apparatus, Decider}
-import cats.{Foldable, Functor, Monoid}
+import apparatus.core.Decider
+import apparatus.core.fix.HFix2
+import cats.{Foldable, Monoid}
+import zio.blocks.schema.Schema
 
-sealed trait ApparatusF[F[_], A, B, R] {
-  def map[S](f: R => S): ApparatusF[F, A, B, S]
-}
+sealed trait ApparatusF[F[_, _], I, O]:
+  def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O]
 
-object ApparatusF {
+object ApparatusF:
 
-  final case class DeciderNode[F[_], I, O](
-                                            networkId: String,
-                                            decider: Decider[?, I, O]
-                                          ) extends ApparatusF[F, I, O, Nothing] {
-    override def map[S](f: Nothing => S): ApparatusF[F, I, O, S] = this.asInstanceOf[ApparatusF[F, I, O, S]]
-  }
+  final case class DeciderRef[F[_, _], I, O](networkId: String) extends ApparatusF[F, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] = DeciderRef(networkId)
+  
+  final case class DeciderNode[F[_, _], I, O](
+                                               networkId: String,
+                                               decider:   Decider[?, I, List[O]],
+                                               schema: Schema[O]
+                                             ) extends ApparatusF[F, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] =
+      DeciderNode(networkId, decider, schema)
 
-  final case class Sequential[F[_], A, B, C, R](
-                                                 left: R,
-                                                 right: R
-                                               ) extends ApparatusF[F, A, C, R] {
-    override def map[S](f: R => S): ApparatusF[F, A, C, S] = ApparatusF.Sequential(f(left), f(right))
-  }
+  final case class Sequential[F[_, _], A, B, C](
+                                                 left:  F[A, B],
+                                                 right: F[B, C]
+                                               ) extends ApparatusF[F, A, C]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, A, C] =
+      Sequential(nt(left), nt(right))
 
-  final case class Parallel[F[_], A, B, C, D, R](
-                                                  left: R,
-                                                  right: R
-                                                ) extends ApparatusF[F, (A, C), (B, D), R] {
-    override def map[S](f: R => S): ApparatusF[F, (A, C), (B, D), S] = ApparatusF.Parallel(f(left), f(right))
-  }
+  final case class Parallel[F[_, _], A, B, C, D](
+                                                  left:  F[A, B],
+                                                  right: F[C, D]
+                                                ) extends ApparatusF[F, (A, C), (B, D)]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, (A, C), (B, D)] =
+      Parallel(nt(left), nt(right))
 
-  final case class Alternative[F[_], A, B, C, D, R](
-                                                     left: R,
-                                                     right: R
-                                                   ) extends ApparatusF[F, Either[A, C], Either[B, D], R] {
-    override def map[S](f: R => S): ApparatusF[F, Either[A, C], Either[B, D], S] = ApparatusF.Alternative(f(left), f(right))
-  }
+  final case class Alternative[F[_, _], A, B, C, D](
+                                                     left:  F[A, B],
+                                                     right: F[C, D]
+                                                   ) extends ApparatusF[F, Either[A, C], Either[B, D]]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Either[A, C], Either[B, D]] =
+      Alternative(nt(left), nt(right))
 
-  final case class Feedback[F[_], A, B, N[_], R](
-                                                  left: R,
-                                                  right: R,
-                                                  foldN: Foldable[N],
+  final case class Feedback[F[_, _], A, B, N[_]](
+                                                  left:     F[A, N[B]],
+                                                  right:    F[N[B], A],
+                                                  foldN:    Foldable[N],
                                                   monoidNB: Monoid[N[B]],
                                                   monoidNA: Monoid[N[A]]
-                                                ) extends ApparatusF[F, A, N[B], R] {
-    override def map[S](f: R => S): ApparatusF[F, A, N[B], S] = ApparatusF.Feedback(f(left), f(right), foldN, monoidNB, monoidNA)
-  }
+                                                ) extends ApparatusF[F, A, N[B]]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, A, N[B]] =
+      Feedback(nt(left), nt(right), foldN, monoidNB, monoidNA)
 
-  final case class FeedbackMany[F[_], A, B, N[_], R](
-                                                      left: R,
-                                                      right: R,
-                                                      foldN: Foldable[N],
+  final case class FeedbackMany[F[_, _], A, B, N[_]](
+                                                      left:     F[N[A], N[B]],
+                                                      right:    F[N[B], N[A]],
+                                                      foldN:    Foldable[N],
                                                       monoidNB: Monoid[N[B]],
                                                       monoidNA: Monoid[N[A]]
-                                                    ) extends ApparatusF[F, N[A], N[B], R] {
-    override def map[S](f: R => S): ApparatusF[F, N[A], N[B], S] = ApparatusF.FeedbackMany(f(left), f(right), foldN, monoidNB, monoidNA)
-  }
+                                                    ) extends ApparatusF[F, N[A], N[B]]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, N[A], N[B]] =
+      FeedbackMany(nt(left), nt(right), foldN, monoidNB, monoidNA)
 
-  final case class Labeled[F[_], I, O, R](
-                                           inner: R,
-                                           name: String
-                                         ) extends ApparatusF[F, I, O, R] {
-    override def map[S](f: R => S): ApparatusF[F, I, O, S] = ApparatusF.Labeled(f(inner), name)
-  }
+  final case class Labeled[F[_, _], I, O](
+                                           inner: F[I, O],
+                                           name:  String
+                                         ) extends ApparatusF[F, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, I, O] =
+      Labeled(nt(inner), name)
 
+
+// ─── HFunctor2 instance ──────────────────────────────────────────────────────
+
+given HFunctor2[ApparatusF] with
+  override def hfmap[F[_, _], G[_, _], I, O](nt: FunctionK2[F, G])(hfio: ApparatusF[F, I, O]): ApparatusF[G, I, O] =
+    hfio.hfmap(nt)
+
+
+// ─── The fixed point type ────────────────────────────────────────────────────
+
+type Apparatus[I, O] = HFix2[ApparatusF, I, O]
+
+
+// ─── Smart constructors ──────────────────────────────────────────────────────
+
+object Apparatus {
+  def decider[I, O](networkId: String, d: Decider[?, I, List[O]])(using S: Schema[O]): Apparatus[I, O] =
+    HFix2(ApparatusF.DeciderNode(networkId, d, S))
+
+  def sequential[A, B, C](left: Apparatus[A, B], right: Apparatus[B, C]): Apparatus[A, C] =
+    HFix2(ApparatusF.Sequential(left, right))
+
+  def parallel[A, B, C, D](left: Apparatus[A, B], right: Apparatus[C, D]): Apparatus[(A, C), (B, D)] =
+    HFix2(ApparatusF.Parallel(left, right))
+
+  def alternative[A, B, C, D](left: Apparatus[A, B], right: Apparatus[C, D]): Apparatus[Either[A, C], Either[B, D]] =
+    HFix2(ApparatusF.Alternative(left, right))
+
+  def feedback[A, B, N[_]](
+                            left: Apparatus[A, N[B]], right: Apparatus[N[B], A]
+                          )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[A, N[B]] =
+    HFix2(ApparatusF.Feedback(left, right, foldN, monoidNB, monoidNA))
+
+  def feedbackMany[A, B, N[_]](
+                                left: Apparatus[N[A], N[B]], right: Apparatus[N[B], N[A]]
+                              )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[N[A], N[B]] =
+    HFix2(ApparatusF.FeedbackMany(left, right, foldN, monoidNB, monoidNA))
+
+  def labeled[I, O](name: String)(inner: Apparatus[I, O]): Apparatus[I, O] =
+    HFix2(ApparatusF.Labeled(inner, name)) 
 }
-
-given functor: [F[_] : Functor, I, O] => Functor[[R] =>> ApparatusF[F, I, O, R]]:
-  def map[A, B](fa: ApparatusF[F, I, O, A])(f: A => B): ApparatusF[F, I, O, B] =
-    fa.map(f)
-
-opaque type Apparatus[F[_], I, O] = Fix[[R] =>> ApparatusF[F, I, O, R]]

@@ -28,6 +28,9 @@ trait BaseMachineT[F[_], I, O] {
   /** Convenience: run one step from `initialState`. */
   final def step(input: I): F[(O, State)] = action(initialState, input)
 
+  final def advance(input: I)(using F: Functor[F]): F[(O, BaseMachineT[F, I, O])] = 
+    action(initialState, input).map { case (o, newState) => (o, BaseMachineT(newState, action)) }
+
   final def mapK[G[_]](f: F ~> G): BaseMachineT[G, I, O] =
     new BaseMachineT[G, I, O] {
       override type State = self.State
