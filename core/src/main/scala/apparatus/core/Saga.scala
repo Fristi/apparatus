@@ -105,8 +105,8 @@ type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (Stp, SagaPhase, SagaStepResult)]
   *
   * Then compose the service machine into the saga's event bus:
   * {{{
-  * def carServiceFSM[F[_]: Applicative]: Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
-  *   carStep.rmap(carStep.lmapOrEmpty(carDecider().toApparatus[F]("car")), BookingCommand.advancePrism)
+  * def carServiceFSM[F[_]: Applicative]: Apparatus[SagaEvent[BookingStep], List[BookingCommand]] =
+  *   carStep.rmap[F](carStep.lmapOrEmpty(carDecider().toApparatus[F]("car")), BookingCommand.advancePrism)
   * }}}
   *
   * @tparam Cmd the command type of the external service (e.g. `CarCommand`)

@@ -72,7 +72,7 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
 def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
   door.toApparatus[Id]("door") >>> Apparatus.Fresh(doorProject)
 
-def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): (O, Apparatus[Id, DoorCommand, O]) =
+def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)
 
 // --- Tests ---
@@ -100,12 +100,12 @@ class DoorSpec extends munit.FunSuite:
     assertEquals(evts, Nil)
 
   test("three knocks open the door via Apparatus network"):
-    val (stats, _) = runAll(freshNetwork, DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock)
+    val stats = runAll(freshNetwork, DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock)
     assertEquals(stats.opened, 1)
     assertEquals(stats.closed, 0)
 
   test("open then close via Apparatus network"):
-    val (stats, _) = runAll(
+    val stats = runAll(
       freshNetwork,
       DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock,
       DoorCommand.Close
@@ -114,7 +114,7 @@ class DoorSpec extends munit.FunSuite:
     assertEquals(stats.closed, 1)
 
   test("stats accumulate across multiple open/close cycles"):
-    val (stats, _) = runAll(
+    val stats = runAll(
       freshNetwork,
       DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock, // open
       DoorCommand.Close,                                        // close

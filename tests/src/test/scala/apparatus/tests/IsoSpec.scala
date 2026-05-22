@@ -68,21 +68,16 @@ class IsoSpec extends munit.FunSuite:
 
   test("imap lifts right-nested Either Apparatus to sealed-trait Cmd/Evt"):
     val adtFsm: Apparatus[Id, Cmd, Evt] = (incFsm ||| (decFsm ||| resetFsm)).imap
-
-    val (e1, f1) = Apparatus.run(adtFsm, Inc(10), DeciderMaterializer.id)
-    assertEquals(e1, Incremented(10))
-    val (e2, f2) = Apparatus.run(f1, Dec(3), DeciderMaterializer.id)
-    assertEquals(e2, Decremented(3))
-    val (e3, _)  = Apparatus.run(f2, Reset(), DeciderMaterializer.id)
-    assertEquals(e3, WasReset())
+    val mat = DeciderMaterializer.id
+    assertEquals(Apparatus.runA(adtFsm, Inc(10), mat), Incremented(10))
+    assertEquals(Apparatus.runA(adtFsm, Dec(3),  mat), Decremented(3))
+    assertEquals(Apparatus.runA(adtFsm, Reset(), mat), WasReset())
 
   // ---- Apparatus.imap: product ----
 
   test("imap lifts tuple Apparatus to case-class In/Out"):
     val adtFsm: Apparatus[Id, In, Out] = (boolFsm *** strFsm).imap
-
-    val (out, _) = Apparatus.run(adtFsm, In(5, "3.14"), DeciderMaterializer.id)
-    assertEquals(out, Out(true, 3.14))
+    assertEquals(Apparatus.runA(adtFsm, In(5, "3.14"), DeciderMaterializer.id), Out(true, 3.14))
 
   // ---- imap preserves internal state ----
 
@@ -92,9 +87,7 @@ class IsoSpec extends munit.FunSuite:
 
     val adtFsm: Apparatus[Id, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
 
-    val (e1, f1) = Apparatus.run(adtFsm, Inc(3), DeciderMaterializer.id)
-    assertEquals(e1, Incremented(3))
-    val (e2, f2) = Apparatus.run(f1, Inc(4), DeciderMaterializer.id)
-    assertEquals(e2, Incremented(7))
-    val (e3, _)  = Apparatus.run(f2, Reset(), DeciderMaterializer.id)
-    assertEquals(e3, WasReset())
+    val results = Apparatus.runSteps(adtFsm, List(Inc(3), Inc(4), Reset()), DeciderMaterializer.id)
+    assertEquals(results(0), Incremented(3))
+    assertEquals(results(1), Incremented(7))
+    assertEquals(results(2), WasReset())

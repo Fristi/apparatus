@@ -4,7 +4,7 @@ import apparatus.core.fix.{Apparatus, ApparatusF}
 
 object Mermaid:
 
-  def print[I, O](apparatus: Apparatus[I, O]): String =
+  def print[Eff[_], I, O](apparatus: Apparatus[Eff, I, O]): String =
     val ctx = Context()
     render(apparatus, ctx)
     "graph TD\n" + ctx.declarations.mkString("\n") + "\n" + ctx.edges.mkString("\n")
@@ -41,7 +41,7 @@ object Mermaid:
       case Stadium => s"""    $id(["$label"])"""
 
   /** Returns (inputPortId, outputPortId) so callers can wire edges. */
-  private def render[I, O](apparatus: Apparatus[I, O], ctx: Context): (String, String) =
+  private def render[Eff[_], I, O](apparatus: Apparatus[Eff, I, O], ctx: Context): (String, String) =
     apparatus.unfix match
 
       case ApparatusF.DeciderMachine(networkId, _, _) =>
@@ -55,8 +55,8 @@ object Mermaid:
         (id, id)
 
       case ApparatusF.BaseMachine(_) =>
-        val id = ctx.fresh("fresh")
-        ctx.node(id, "fresh", Shape.Box)
+        val id = ctx.fresh("node")
+        ctx.node(id, "Machine", Shape.Box)
         (id, id)
 
       case ApparatusF.Sequential(left, right) =>
@@ -94,7 +94,7 @@ object Mermaid:
       case ApparatusF.Feedback(left, right, _, _, _) =>
         val (lIn, lOut) = render(left, ctx)
         val (rIn, rOut) = render(right, ctx)
-        ctx.edge(lOut, rIn, "N[B]")
+        ctx.edge(lOut, rIn, "B")
         ctx.edge(rOut, lIn, "A ↺")
         (lIn, lOut)
 
@@ -106,41 +106,45 @@ object Mermaid:
         (lIn, lOut)
 
       case ApparatusF.LmapOrEmpty(inner, _, _) =>
-        val guardId = ctx.fresh("guard")
-        ctx.node(guardId, "lmapOrEmpty", Shape.Diamond)
+        val filterId = ctx.fresh("filter")
+        ctx.node(filterId, "lmapOrEmpty", Shape.Diamond)
         val (iIn, iOut) = render(inner, ctx)
-        ctx.edge(guardId, iIn, "Some")
-        (guardId, iOut)
+        ctx.edge(filterId, iIn, "defined")
+        (filterId, iOut)
 
       case ApparatusF.Merged(left, right, _) =>
         val fanId  = ctx.fresh("fan")
-        val joinId = ctx.fresh("join")
-        ctx.node(fanId,  "fan",  Shape.Stadium)
-        ctx.node(joinId, "merge", Shape.Stadium)
+        val combId = ctx.fresh("combine")
+        ctx.node(fanId,  "fan-out", Shape.Stadium)
+        ctx.node(combId, "combine", Shape.Stadium)
         val (lIn, lOut) = render(left, ctx)
         val (rIn, rOut) = render(right, ctx)
         ctx.edge(fanId, lIn)
         ctx.edge(fanId, rIn)
-        ctx.edge(lOut, joinId)
-        ctx.edge(rOut, joinId)
-        (fanId, joinId)
+        ctx.edge(lOut, combId)
+        ctx.edge(rOut, combId)
+        (fanId, combId)
 
-      // Label directly on a leaf — rename the node box rather than wrapping in subgraph
-      case ApparatusF.Labeled(inner, name) if isLeaf(inner) =>
-        val id = ctx.fresh("node")
-        ctx.node(id, name, Shape.Box)
-        (id, id)
-
-      // Label on a composite — wrap in a Mermaid subgraph
       case ApparatusF.Labeled(inner, name) =>
-        ctx.openSubgraph(name)
-        val result = render(inner, ctx)
-        ctx.closeSubgraph()
-        result
+        inner.unfix match
+          case ApparatusF.LmapOrEmpty(innerInner, _, _) =>
+            val filterId = ctx.fresh("filter")
+            ctx.node(filterId, name, Shape.Diamond)
+            val (iIn, iOut) = render(innerInner, ctx)
+            ctx.edge(filterId, iIn, "defined")
+            (filterId, iOut)
+          case _ if isLeaf(inner) =>
+            val id = ctx.fresh("node")
+            ctx.node(id, name, Shape.Box)
+            (id, id)
+          case _ =>
+            ctx.openSubgraph(name)
+            val result = render(inner, ctx)
+            ctx.closeSubgraph()
+            result
 
-  private def isLeaf[I, O](apparatus: Apparatus[I, O]): Boolean =
+  private def isLeaf[Eff[_], I, O](apparatus: Apparatus[Eff, I, O]): Boolean =
     apparatus.unfix match
-      case _: ApparatusF.DeciderMachine[?, ?, ?] => true
-      case _: ApparatusF.Ref[?, ?, ?]  => true
-      case _: ApparatusF.BaseMachine[?, ?, ?]       => true
-      case _                                   => false
+      case _: ApparatusF.Ref[?, ?, ?, ?]         => true
+      case _: ApparatusF.BaseMachine[?, ?, ?, ?] => true
+      case _                                     => false

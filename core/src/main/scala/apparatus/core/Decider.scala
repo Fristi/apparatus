@@ -32,7 +32,7 @@ final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) 
         val ns = self.evolve(o, state)
         (o, ns).pure
 
-  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = Apparatus.Stable(id, toBaseMachineT)
+  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = Apparatus.Stable[F, I, O](id, toBaseMachineT)
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
@@ -84,22 +84,6 @@ extension [S, I, O](decider: Decider[S, I, List[O]]) {
       decide = (i, s) => decider.decide(i, s),
       evolve = (o, s) => decider.evolve(o, s)
     )
-}
-
-extension [S, E, I, O](decider: Decider[S, I, Either[E, List[O]]]) {
-  def absorbEitherToBaseMachine[F[_], EE](using M: MonadError[F, EE], ev: E =:= EE): BaseMachineT[F, I, List[O]] =
-    absorbEitherToBaseMachine_(ev)
-
-  def absorbEitherToBaseMachine_[F[_], EE](liftError: E => EE)(using M: MonadError[F, EE]): BaseMachineT[F, I, List[O]] =
-    new BaseMachineT[F, I, List[O]] {
-      override type State = S
-      override def initialState: S = decider.state
-      override def action(state: State, input: I): F[(List[O], State)] =
-        for {
-          o <- M.fromEither(decider.decide(input, state).left.map(liftError))
-          ns = decider.evolve(Right(o), state)
-        } yield (o, ns)
-    }
 }
 
 trait DeciderMaterializer[F[_]] {
