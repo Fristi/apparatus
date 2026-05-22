@@ -27,21 +27,20 @@ object EventStore {
         for {
           acquired <- eventStore.lockAggregate(networkId, aggregateId)
           _ <- if (!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
-          events <- eventStore.loadAggregateStream(networkId, aggregateId)
-          _ = println(s"events: $events")
-          evolvedDecider = apparatus.evolveFrom(events.map(_.body))
         } yield {
-          val nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
-
           new BaseMachineT[ConnectionIO, I, List[O]] {
             override type State = S
-            override def initialState: S = evolvedDecider.state
+            override def initialState: S = apparatus.state
             override def action(state: State, input: I): ConnectionIO[(List[O], State)] =
-              val o = evolvedDecider.decide(input, state)
-              val eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
-              val ns = evolvedDecider.evolve(o, state)
-
-              eventStore.appendAggregateStream(networkId, aggregateId, eventStreamToAppend).map(_ => (o, ns))
+              for {
+                events <- eventStore.loadAggregateStream(networkId, aggregateId)
+                evolvedDecider = apparatus.evolveFrom(events.map(_.body))
+                o = evolvedDecider.decide(input, state)
+                nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
+                eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
+                ns = evolvedDecider.evolve(o, state)
+                _ <- eventStore.appendAggregateStream(networkId, aggregateId, eventStreamToAppend)
+              } yield (o, ns)
           }
         }
     }
