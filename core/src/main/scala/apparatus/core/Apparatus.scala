@@ -155,7 +155,7 @@ extension [F[_], I, O](left: Apparatus[F, I, O]) {
       .andThen(fixPkg.Apparatus.parallel(Apparatus.identity[F, O], right))
       .rmap[O](_._1)
       
-  def mermaid: String = Mermaid.print(left)
+  def mermaid(using Monad[F]): String = Mermaid.print(left)
 }
 
 extension [F[_], N[_], A, B](left: Apparatus[F, A, N[B]]) {

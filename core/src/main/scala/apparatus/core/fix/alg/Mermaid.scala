@@ -1,12 +1,14 @@
 package apparatus.core.fix.alg
 
 import apparatus.core.fix.{Apparatus, ApparatusF}
+import cats.Monad
 
 object Mermaid:
 
-  def print[Eff[_], I, O](apparatus: Apparatus[Eff, I, O]): String =
+  def print[Eff[_] : Monad, I, O](apparatus: Apparatus[Eff, I, O]): String =
+    val (_, normalized) = normalize(apparatus)
     val ctx = Context()
-    render(apparatus, ctx)
+    render(normalized, ctx)
     "graph TD\n" + ctx.declarations.mkString("\n") + "\n" + ctx.edges.mkString("\n")
 
   // ── internals ──────────────────────────────────────────────────────────────
