@@ -54,8 +54,8 @@ object DoorStats:
 val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
   DeciderBuilder
     .seed[DoorState](DoorState.Closed(0))
-    .decide[DoorCommand, List[DoorEvent]](_ decide _)
-    .evolveList(_ evolve _)
+    .decide[DoorCommand, List[DoorEvent]](_.decide(_))
+    .evolveList(_.evolve(_))
 
 val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   BaseMachineT.apply[Id, DoorStats, List[DoorEvent], DoorStats](
@@ -70,7 +70,7 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   )
 
 def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
-  door.toApparatus[Id]("door") >>> Apparatus.fresh(doorProject)
+  door.toApparatus("door") >>> Apparatus.fresh(doorProject)
 
 def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)

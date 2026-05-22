@@ -23,16 +23,16 @@ import zio.blocks.schema.Schema
  * @param evolve pure function `(output, state) => newState`
  */
 final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) => S) { self =>
-  def toBaseMachineT[F[_] : Applicative]: BaseMachineT[F, I, O] {type State = S} =
-    new BaseMachineT[F, I, O]:
+  def toBaseMachineT: BaseMachineT[Id, I, O] {type State = S} =
+    new BaseMachineT[Id, I, O]:
       override type State = S
       override def initialState: S = self.state
-      override def action(state: State, input: I): F[(O, State)] =
+      override def action(state: State, input: I): Id[(O, State)] =
         val o = self.decide(input, state)
         val ns = self.evolve(o, state)
-        (o, ns).pure
+        (o, ns)
 
-  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = Apparatus.fresh[F, I, O](toBaseMachineT)
+  def toApparatus(id: String): Apparatus[Id, I, O] = Apparatus.fresh[Id, I, O](toBaseMachineT)
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
@@ -92,6 +92,6 @@ trait DeciderMaterializer[F[_]] {
 
 object DeciderMaterializer {
   val id: DeciderMaterializer[Id] = new DeciderMaterializer[Id] {
-    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[BaseMachineT[Id, I, List[O]]] = apparatus.toBaseMachineT[Id]
+    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[BaseMachineT[Id, I, List[O]]] = apparatus.toBaseMachineT
   }
 }

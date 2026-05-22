@@ -1,11 +1,7 @@
 package apparatus.core.fix
 
-import apparatus.core.{BaseMachineT, Decider, DeciderMaterializer}
-import apparatus.core.fix.HFix2
-import apparatus.core.fix.alg.Mermaid
-import cats.arrow.{Category, Choice, Profunctor, Strong}
-import cats.{Applicative, Foldable, Monad, Monoid}
-import cats.implicits.*
+import apparatus.core.{BaseMachineT, Decider}
+import cats.{Foldable, Monoid}
 import zio.blocks.schema.Schema
 
 sealed trait ApparatusF[F[_, _], Eff[_], I, O]:

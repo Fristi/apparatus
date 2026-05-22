@@ -23,22 +23,21 @@ trait EventStore[F[_]]:
 object EventStore {
   def deciderMaterializer(eventStore: EventStore[ConnectionIO], aggregateId: UUID): DeciderMaterializer[ConnectionIO] =
     new DeciderMaterializer[ConnectionIO] {
-      override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): ConnectionIO[BaseMachineT[ConnectionIO, I, List[O]]] =
+      override def materialize[S, I, O: Schema](decider: Decider[S, I, List[O]], networkId: String): ConnectionIO[BaseMachineT[ConnectionIO, I, List[O]]] =
         for {
           acquired <- eventStore.lockAggregate(networkId, aggregateId)
           _ <- if (!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
         } yield {
           new BaseMachineT[ConnectionIO, I, List[O]] {
             override type State = S
-            override def initialState: S = apparatus.state
-            override def action(state: State, input: I): ConnectionIO[(List[O], State)] =
+            override def initialState: S = decider.state
+            override def action(_state: State, input: I): ConnectionIO[(List[O], State)] =
               for {
                 events <- eventStore.loadAggregateStream(networkId, aggregateId)
-                evolvedDecider = apparatus.evolveFrom(events.map(_.body))
-                o = evolvedDecider.decide(input, state)
+                ns = decider.evolve(events.sortBy(_.sequenceNr).map(_.body), initialState) // TODO: this is weird .. to reference to initialstate
+                o = decider.decide(input, ns)
                 nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
                 eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
-                ns = evolvedDecider.evolve(o, state)
                 _ <- eventStore.appendAggregateStream(networkId, aggregateId, eventStreamToAppend)
               } yield (o, ns)
           }

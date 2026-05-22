@@ -33,20 +33,21 @@ enum BankAccountState:
       case BankAccountState.Closed => this
     }
 
-  def decide(cmd: BankAccountCommand): List[BankAccountEvent] = this match {
-    case BankAccountState.Uninitialized => cmd match {
-      case BankAccountCommand.Open(at) => List(BankAccountEvent.Opened(at))
-      case _ => List(BankAccountEvent.Rejected("invalid command for current state"))
+  def decide(cmd: BankAccountCommand): List[BankAccountEvent] = 
+    this match {
+      case BankAccountState.Uninitialized => cmd match {
+        case BankAccountCommand.Open(at) => List(BankAccountEvent.Opened(at))
+        case _ => List(BankAccountEvent.Rejected("invalid command for current state"))
+      }
+      case BankAccountState.Active(balance) => cmd match {
+        case BankAccountCommand.Deposit(amount, at) => List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else BankAccountEvent.Deposited(amount, at))
+        case BankAccountCommand.Withdraw(amount, at) =>
+          List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else if (amount > balance) BankAccountEvent.Rejected("insufficient funds") else BankAccountEvent.Withdrawn(amount, at))
+        case BankAccountCommand.Close(at) => List(BankAccountEvent.ClosedAccount(at))
+        case _ => Nil
+      }
+      case BankAccountState.Closed => List(BankAccountEvent.Rejected("invalid command for current state"))
     }
-    case BankAccountState.Active(balance) => cmd match {
-      case BankAccountCommand.Deposit(amount, at) => List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else BankAccountEvent.Deposited(amount, at))
-      case BankAccountCommand.Withdraw(amount, at) =>
-        List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else if (amount > balance) BankAccountEvent.Rejected("insufficient funds") else BankAccountEvent.Withdrawn(amount, at))
-      case BankAccountCommand.Close(at) => List(BankAccountEvent.ClosedAccount(at))
-      case _ => Nil
-    }
-    case BankAccountState.Closed => List(BankAccountEvent.Rejected("invalid command for current state"))
-  }
 
 enum BankAccountCommand:
   case Open(at: Instant)

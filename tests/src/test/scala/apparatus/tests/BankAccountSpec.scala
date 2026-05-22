@@ -49,10 +49,13 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
   def decider[F[_]]: Apparatus[F, BankAccountCommand, List[BankAccountEvent]] = 
     Apparatus.deciderMachine("bank-account", bankAccount)
   
-  def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] =
-    val prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] = decider[ConnectionIO].tap(transactionsProjection(id, DoobieBankAccountTransactionRepository))
+  def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] = {
+    val prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] =
+      decider[ConnectionIO].tap(transactionsProjection(id, DoobieBankAccountTransactionRepository))
     val deciderMaterializer = EventStore.deciderMaterializer(PostgresEventStore, id)
+
     Apparatus.runA(prg, cmd, deciderMaterializer).transact(xa)
+  }
 
   test("open account emits Opened") {
     withContainers { c =>

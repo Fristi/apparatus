@@ -6,15 +6,22 @@ import cats.{Foldable, Monad, Monoid}
 import cats.implicits.*
 import cats.data.{Kleisli, StateT}
 
-type MaterializedRegistry[F[_]] = Map[String, BaseMachineT[F, ?, ?]]
-type CompiledNetwork[F[_], I, O] = Kleisli[[z] =>> StateT[F, MaterializedRegistry[F], z], I, O]
+final case class NetworkState[F[_]](
+                                     deciders: Map[String, BaseMachineT[F, ?, ?]],
+                                     states: Map[String, Any]
+                                   ) {
+  def withUpdatedState(id: String, state: Any): NetworkState[F] =
+    copy(states = states + (id -> state))
+}
+
+type CompiledNetwork[F[_], I, O] = Kleisli[[z] =>> StateT[F, NetworkState[F], z], I, O]
 
 private def evalAlg[F[_] : Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F, I, O], [I, O] =>> CompiledNetwork[F, I, O]] =
   [I, O] => (node: ApparatusF[[x, y] =>> CompiledNetwork[F, x, y], F, I, O]) => node match {
     case ApparatusF.DeciderMachine(_, _, _) =>
       sys.error("DeciderMachine reached evalAlg — normalize must be called first")
 
-    case ApparatusF.BaseMachine(_) =>
+    case ApparatusF.BaseMachine(machine) =>
       sys.error("BaseMachine reached evalAlg — normalize must be called first")
 
     case ApparatusF.Sequential(left, right) =>
@@ -39,7 +46,7 @@ private def evalAlg[F[_] : Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F
       Kleisli { c =>
         pf.lift(c) match
           case Some(a) => inner.run(a)
-          case None    => mb.empty.pure[[z] =>> StateT[F, MaterializedRegistry[F], z]]
+          case None    => mb.empty.pure[[z] =>> StateT[F, NetworkState[F], z]]
       }
 
     case ApparatusF.Merged(left, right, mb) =>
@@ -50,22 +57,23 @@ private def evalAlg[F[_] : Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F
 
     case ApparatusF.Ref(networkId) =>
       Kleisli { input =>
-        StateT { registry =>
-          val machine = registry(networkId).asInstanceOf[BaseMachineT[F, I, O]]
-          machine.advance(input).map { case (o, updated) =>
-            (registry + (networkId -> updated.asInstanceOf[BaseMachineT[F, ?, ?]]), o)
-          }
-        }
+        for {
+          registry <- StateT.get[F, NetworkState[F]]
+          machine:BaseMachineT[F, I, O] = registry.deciders(networkId).asInstanceOf[BaseMachineT[F, I, O]]
+          state = registry.states.getOrElse(networkId, machine.initialState).asInstanceOf[machine.State]
+          (o, newState) <- StateT.liftF(machine.action(state, input))
+          _ <- StateT.modify[F, NetworkState[F]](_.withUpdatedState(networkId, newState))
+        } yield o
       }
   }
 
-def compile[F[_] : Monad, I, O](materializer: DeciderMaterializer[F])(apparatus: Apparatus[F, I, O]): F[(CompiledNetwork[F, I, O], MaterializedRegistry[F])] = {
+def compile[F[_] : Monad, I, O](materializer: DeciderMaterializer[F])(apparatus: Apparatus[F, I, O]): F[(CompiledNetwork[F, I, O], NetworkState[F])] = {
   val (normalizedRegistry, normalized) = normalize(apparatus)
   materializeNormalizedRegistryMap(normalizedRegistry, materializer)
     .map { initialRegistry =>
       val rewritten: CompiledNetwork[F, I, O] = cata2(evalAlg[F])(normalized)
       val network: CompiledNetwork[F, I, O] = Kleisli { (i: I) =>
-        StateT[F, MaterializedRegistry[F], O] { registry =>
+        StateT[F, NetworkState[F], O] { registry =>
           rewritten.run(i).run(registry)
         }
       }
@@ -73,22 +81,22 @@ def compile[F[_] : Monad, I, O](materializer: DeciderMaterializer[F])(apparatus:
     }
 }
 
-private[alg] def materializeNormalizedRegistryMap[F[_] : Monad](entries: NormalizedRegistry[F], m: DeciderMaterializer[F]): F[MaterializedRegistry[F]] =
+private[alg] def materializeNormalizedRegistryMap[F[_] : Monad](entries: NormalizedRegistry[F], m: DeciderMaterializer[F]): F[NetworkState[F]] =
   entries
     .toList
     .traverse { case (id, entry) => entry.materialize(m).map(id -> _) }
-    .map(_.toMap)
+    .map(x => NetworkState(x.toMap, Map.empty))
 
 /** Each B in N[B] fed individually to right (B → N[A]), resulting A values re-queued until quiescent. */
 private def feedbackLoop[F[_] : Monad, A, B, N[_]](
-  left:     CompiledNetwork[F, A, N[B]],
-  right:    CompiledNetwork[F, B, N[A]],
-  foldN:    Foldable[N],
-  monoidNB: Monoid[N[B]],
-  monoidNA: Monoid[N[A]]
-): CompiledNetwork[F, A, N[B]] =
+                                                    left:     CompiledNetwork[F, A, N[B]],
+                                                    right:    CompiledNetwork[F, B, N[A]],
+                                                    foldN:    Foldable[N],
+                                                    monoidNB: Monoid[N[B]],
+                                                    monoidNA: Monoid[N[A]]
+                                                  ): CompiledNetwork[F, A, N[B]] =
   Kleisli { a =>
-    def loop(pending: List[A], acc: N[B]): StateT[F, MaterializedRegistry[F], N[B]] =
+    def loop(pending: List[A], acc: N[B]): StateT[F, NetworkState[F], N[B]] =
       pending match
         case Nil => acc.pure
         case head :: tail =>
@@ -104,14 +112,14 @@ private def feedbackLoop[F[_] : Monad, A, B, N[_]](
 
 /** Like feedbackLoop but starts with N[A] instead of a single A. */
 private def feedbackManyLoop[F[_] : Monad, A, B, N[_]](
-  left:     CompiledNetwork[F, A, N[B]],
-  right:    CompiledNetwork[F, B, N[A]],
-  foldN:    Foldable[N],
-  monoidNB: Monoid[N[B]],
-  monoidNA: Monoid[N[A]]
-): CompiledNetwork[F, N[A], N[B]] =
+                                                        left:     CompiledNetwork[F, A, N[B]],
+                                                        right:    CompiledNetwork[F, B, N[A]],
+                                                        foldN:    Foldable[N],
+                                                        monoidNB: Monoid[N[B]],
+                                                        monoidNA: Monoid[N[A]]
+                                                      ): CompiledNetwork[F, N[A], N[B]] =
   Kleisli { nas =>
-    def loop(pending: List[A], acc: N[B]): StateT[F, MaterializedRegistry[F], N[B]] =
+    def loop(pending: List[A], acc: N[B]): StateT[F, NetworkState[F], N[B]] =
       pending match
         case Nil => acc.pure
         case head :: tail =>

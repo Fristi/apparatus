@@ -1,8 +1,8 @@
 package apparatus.core
 
 import cats.arrow.Profunctor
-import cats.{Applicative, Functor, ~>}
 import cats.implicits.*
+import cats.{Functor, ~>}
 
 /** Core abstraction for a stateful machine running in effect `F`.
   *
@@ -21,15 +21,14 @@ trait BaseMachineT[F[_], I, O] {
 
   /** The state the machine starts from. */
   def initialState: State
+  
+  
 
   /** Transition function: given current state and input, return output + next state. */
   def action(state: State, input: I): F[(O, State)]
 
   /** Convenience: run one step from `initialState`. */
   final def step(input: I): F[(O, State)] = action(initialState, input)
-
-  final def advance(input: I)(using F: Functor[F]): F[(O, BaseMachineT[F, I, O])] = 
-    action(initialState, input).map { case (o, newState) => (o, BaseMachineT(newState, action)) }
 
   final def mapK[G[_]](f: F ~> G): BaseMachineT[G, I, O] =
     new BaseMachineT[G, I, O] {

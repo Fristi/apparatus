@@ -403,7 +403,7 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
           case SagaEvent.StepStarted(_) => SagaState.Running(steps.head, steps.tail, SortedSet.empty)
           case _ => state
         }
-      case SagaState.Running(_, todo, compensation) =>
+      case SagaState.Running(current, todo, compensation) =>
         evt match {
           case SagaEvent.StepProgressed(name, SagaStepResult.Completed) =>
             if todo.isEmpty then SagaState.Succeeded()
