@@ -1,43 +1,64 @@
 package apparatus.core
 
-import apparatus.core.fix as fixPkg
-import apparatus.core.fix.alg.{Mermaid, compile as fixCompile}
-import cats.*
+import apparatus.core.fix.alg.Mermaid
+import apparatus.core.fix.{ApparatusF, HFix2, alg}
+import apparatus.core.{BaseMachineT, Decider, DeciderMaterializer, Iso}
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
+import cats.{Applicative, Foldable, Monad, Monoid}
 import zio.blocks.schema.Schema
 
-// ─── The type ─────────────────────────────────────────────────────────────────
+// ─── The fixed point type ────────────────────────────────────────────────────
 
-type Apparatus[F[_], I, O] = fixPkg.Apparatus[F, I, O]
+type Apparatus[Eff[_], I, O] = HFix2[[F[_, _], I, O] =>> ApparatusF[F, Eff, I, O], I, O]
 
-// ─── Companion ────────────────────────────────────────────────────────────────
+
+// ─── Smart constructors ──────────────────────────────────────────────────────
 
 object Apparatus:
 
-  // ── Smart constructors ──────────────────────────────────────────────────────
+  def deciderMachine[Eff[_], I, E](networkId: String, d: Decider[?, I, List[E]])(using S: Schema[E]): Apparatus[Eff, I, List[E]] =
+    HFix2(ApparatusF.DeciderMachine(networkId, d, S))
 
-  object Fresh:
-    def apply[F[_], I, O](machine: BaseMachineT[F, I, O]): Apparatus[F, I, O] =
-      fixPkg.Apparatus.fresh(machine)
+  def sequential[Eff[_], A, B, C](left: Apparatus[Eff, A, B], right: Apparatus[Eff, B, C]): Apparatus[Eff, A, C] =
+    HFix2(ApparatusF.Sequential(left, right))
 
-  object Stable:
-    /** Wraps machine and tags it with `id` for Mermaid display. */
-    def apply[F[_], I, O](id: String, machine: BaseMachineT[F, I, O]): Apparatus[F, I, O] =
-      fixPkg.Apparatus.labeled(id)(fixPkg.Apparatus.fresh(machine))
+  def parallel[Eff[_], A, B, C, D](left: Apparatus[Eff, A, B], right: Apparatus[Eff, C, D]): Apparatus[Eff, (A, C), (B, D)] =
+    HFix2(ApparatusF.Parallel(left, right))
 
-  object DeciderMachine:
-    def apply[F[_], I, E](id: String, decider: Decider[?, I, List[E]])(using Schema[E]): Apparatus[F, I, List[E]] =
-      fixPkg.Apparatus.decider[F, I, E](id, decider)
+  def alternative[Eff[_], A, B, C, D](left: Apparatus[Eff, A, B], right: Apparatus[Eff, C, D]): Apparatus[Eff, Either[A, C], Either[B, D]] =
+    HFix2(ApparatusF.Alternative(left, right))
+
+  def feedback[Eff[_], A, B, N[_]](
+                                    left: Apparatus[Eff, A, N[B]], right: Apparatus[Eff, B, N[A]]
+                                  )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[Eff, A, N[B]] =
+    HFix2(ApparatusF.Feedback(left, right, foldN, monoidNB, monoidNA))
+
+  def feedbackMany[Eff[_], A, B, N[_]](
+                                        left: Apparatus[Eff, A, N[B]], right: Apparatus[Eff, B, N[A]]
+                                      )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[Eff, N[A], N[B]] =
+    HFix2(ApparatusF.FeedbackMany(left, right, foldN, monoidNB, monoidNA))
+
+  def lmapOrEmpty[Eff[_], A, B, C](inner: Apparatus[Eff, A, B], pf: PartialFunction[C, A])(using mb: Monoid[B]): Apparatus[Eff, C, B] =
+    HFix2(ApparatusF.LmapOrEmpty(inner, pf, mb))
+
+  def merged[Eff[_], A, B](left: Apparatus[Eff, A, B], right: Apparatus[Eff, A, B])(using mb: Monoid[B]): Apparatus[Eff, A, B] =
+    HFix2(ApparatusF.Merged(left, right, mb))
+
+  def fresh[Eff[_], I, O](machine: BaseMachineT[Eff, I, O]): Apparatus[Eff, I, O] =
+    HFix2(ApparatusF.BaseMachine(machine))
+
+  def labeled[Eff[_], I, O](name: String)(inner: Apparatus[Eff, I, O]): Apparatus[Eff, I, O] =
+    HFix2(ApparatusF.Labeled(inner, name))
 
   def identity[F[_] : Applicative, A]: Apparatus[F, A, A] =
-    fixPkg.Apparatus.fresh(BaseMachineT.stateless[F, A, A](_.pure))
+    fresh(BaseMachineT.stateless[F, A, A](_.pure))
 
   // ── Run methods ─────────────────────────────────────────────────────────────
 
   /** Run a single step. */
   def runA[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
-    fixCompile(mat)(fsm).flatMap { case (network, registry) =>
+    alg.compile(mat)(fsm).flatMap { case (network, registry) =>
       network.run(input).runA(registry)
     }
 
@@ -47,9 +68,9 @@ object Apparatus:
 
   /** Fold over inputs, threading registry state across all steps. */
   def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
-    fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
-  ): F[O] =
-    fixCompile(mat)(fsm).flatMap { case (network, initialRegistry) =>
+                                                               fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
+                                                             ): F[O] =
+    alg.compile(mat)(fsm).flatMap { case (network, initialRegistry) =>
       entries.foldM((Monoid[O].empty, initialRegistry)) { case ((acc, registry), i) =>
         network.run(i).run(registry).map { case (newRegistry, o) => (acc |+| o, newRegistry) }
       }.map(_._1)
@@ -57,7 +78,7 @@ object Apparatus:
 
   /** Run a sequence of inputs, threading registry state, returning all outputs in order. */
   def runSteps[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], inputs: List[I], mat: DeciderMaterializer[F]): F[List[O]] =
-    fixCompile(mat)(fsm).flatMap { case (network, initialRegistry) =>
+    alg.compile(mat)(fsm).flatMap { case (network, initialRegistry) =>
       inputs.foldM((List.empty[O], initialRegistry)) { case ((acc, registry), i) =>
         network.run(i).run(registry).map { case (newRegistry, o) => (acc :+ o, newRegistry) }
       }.map(_._1)
@@ -65,16 +86,16 @@ object Apparatus:
 
   /** Alias for [[runMultipleA]]. */
   def runMultiple[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
-    fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
-  ): F[O] =
+                                                              fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
+                                                            ): F[O] =
     runMultipleA(fsm, entries, mat)
 
   // ── Cats instances ───────────────────────────────────────────────────────────
 
   given [F[_] : Applicative]: Category[[I, O] =>> Apparatus[F, I, O]] with
-    def id[A]: Apparatus[F, A, A] = identity[F, A]
+    def id[A]: Apparatus[F, A, A] = Apparatus.identity[F, A]
     def compose[A, B, C](f: Apparatus[F, B, C], g: Apparatus[F, A, B]): Apparatus[F, A, C] =
-      fixPkg.Apparatus.sequential(g, f)
+      Apparatus.sequential(g, f)
 
   given [F[_] : Applicative]: Profunctor[[I, O] =>> Apparatus[F, I, O]] with
     def dimap[A, B, C, D](fab: Apparatus[F, A, B])(f: C => A)(g: B => D): Apparatus[F, C, D] =
@@ -88,11 +109,10 @@ object Apparatus:
 
   given [F[_] : Applicative]: Choice[[I, O] =>> Apparatus[F, I, O]] with
     def choice[A, B, C](f: Apparatus[F, A, C], g: Apparatus[F, B, C]): Apparatus[F, Either[A, B], C] =
-      fixPkg.Apparatus.alternative(f, g).rmap(_.merge)
-    def id[A]: Apparatus[F, A, A] = identity[F, A]
+      Apparatus.alternative(f, g).rmap(_.merge)
+    def id[A]: Apparatus[F, A, A] = Apparatus.identity[F, A]
     def compose[A, B, C](f: Apparatus[F, B, C], g: Apparatus[F, A, B]): Apparatus[F, A, C] =
-      fixPkg.Apparatus.sequential(g, f)
-
+      Apparatus.sequential(g, f)
 
 // ─── Extension methods ────────────────────────────────────────────────────────
 
@@ -101,41 +121,41 @@ extension [F[_], I, O](left: Apparatus[F, I, O]) {
   // Structural combinators — no Applicative constraint needed
 
   def label(name: String): Apparatus[F, I, O] =
-    fixPkg.Apparatus.labeled(name)(left)
+    Apparatus.labeled(name)(left)
 
   def andThen[C](right: Apparatus[F, O, C]): Apparatus[F, I, C] =
-    fixPkg.Apparatus.sequential(left, right)
+    Apparatus.sequential(left, right)
 
   def >>>[C](right: Apparatus[F, O, C]): Apparatus[F, I, C] = andThen(right)
 
   def par[C, D](right: Apparatus[F, C, D]): Apparatus[F, (I, C), (O, D)] =
-    fixPkg.Apparatus.parallel(left, right)
+    Apparatus.parallel(left, right)
 
   def ***[C, D](right: Apparatus[F, C, D]): Apparatus[F, (I, C), (O, D)] = par(right)
 
   def or[C, D](right: Apparatus[F, C, D]): Apparatus[F, Either[I, C], Either[O, D]] =
-    fixPkg.Apparatus.alternative(left, right)
+    Apparatus.alternative(left, right)
 
   def |||[C, D](right: Apparatus[F, C, D]): Apparatus[F, Either[I, C], Either[O, D]] = or(right)
 
   def lmapOrEmpty[C](pf: PartialFunction[C, I])(using m: Monoid[O]): Apparatus[F, C, O] =
-    fixPkg.Apparatus.lmapOrEmpty(left, pf)
+    Apparatus.lmapOrEmpty(left, pf)
 
   def merge(right: Apparatus[F, I, O])(using m: Monoid[O]): Apparatus[F, I, O] =
-    fixPkg.Apparatus.merged(left, right)
+    Apparatus.merged(left, right)
 
   // Effect-dependent combinators — Applicative[F] from the type
 
   def lmap[C](f: C => I)(using Applicative[F]): Apparatus[F, C, O] =
-    fixPkg.Apparatus.sequential(
-      fixPkg.Apparatus.fresh(BaseMachineT.stateless[F, C, I](c => f(c).pure)),
+    Apparatus.sequential(
+      Apparatus.fresh(BaseMachineT.stateless[F, C, I](c => f(c).pure)),
       left
     )
 
   def rmap[C](f: O => C)(using Applicative[F]): Apparatus[F, I, C] =
-    fixPkg.Apparatus.sequential(
+    Apparatus.sequential(
       left,
-      fixPkg.Apparatus.fresh(BaseMachineT.stateless[F, O, C](o => f(o).pure))
+      Apparatus.fresh(BaseMachineT.stateless[F, O, C](o => f(o).pure))
     )
 
   def dimap[C, D](f: C => I)(g: O => D)(using Applicative[F]): Apparatus[F, C, D] =
@@ -145,23 +165,23 @@ extension [F[_], I, O](left: Apparatus[F, I, O]) {
     left.lmap(isoIn.from).rmap(isoOut.to)
 
   def first[C](using Applicative[F]): Apparatus[F, (I, C), (O, C)] =
-    fixPkg.Apparatus.parallel(left, Apparatus.identity[F, C])
+    Apparatus.parallel(left, Apparatus.identity[F, C])
 
   def second[C](using Applicative[F]): Apparatus[F, (C, I), (C, O)] =
-    fixPkg.Apparatus.parallel(Apparatus.identity[F, C], left)
+    Apparatus.parallel(Apparatus.identity[F, C], left)
 
   def tap[C](right: Apparatus[F, O, C])(using Applicative[F]): Apparatus[F, I, O] =
     left.rmap[(O, O)](o => (o, o))
-      .andThen(fixPkg.Apparatus.parallel(Apparatus.identity[F, O], right))
+      .andThen(Apparatus.parallel(Apparatus.identity[F, O], right))
       .rmap[O](_._1)
-      
+
   def mermaid(using Monad[F]): String = Mermaid.print(left)
 }
 
 extension [F[_], N[_], A, B](left: Apparatus[F, A, N[B]]) {
   def feedback(right: Apparatus[F, B, N[A]])(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[F, A, N[B]] =
-    fixPkg.Apparatus.feedback(left, right)
+    Apparatus.feedback(left, right)
 
   def feedbackMany(right: Apparatus[F, B, N[A]])(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[F, N[A], N[B]] =
-    fixPkg.Apparatus.feedbackMany(left, right)
+    Apparatus.feedbackMany(left, right)
 }

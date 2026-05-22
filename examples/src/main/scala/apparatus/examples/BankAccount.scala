@@ -1,6 +1,6 @@
 package apparatus.examples
 
-import apparatus.core.*
+import apparatus.core.{Apparatus, BaseMachineT, Decider, DeciderBuilder, evolveList}
 import cats.Applicative
 import cats.implicits.*
 import doobie.*
@@ -69,7 +69,7 @@ val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountE
     .evolveList(_.evolve(_))
 
 def transactionsProjection(id: UUID, repo: BankAccountTransactionRepository[ConnectionIO]): Apparatus[ConnectionIO, List[BankAccountEvent], Int] =
-  Apparatus.Fresh(BaseMachineT.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs =>
+  Apparatus.fresh(BaseMachineT.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs =>
     evs.traverse {
       case BankAccountEvent.Deposited(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Deposit, amount, at))
       case BankAccountEvent.Withdrawn(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Withdrawal, amount, at))

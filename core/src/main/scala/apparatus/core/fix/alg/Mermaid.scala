@@ -1,6 +1,7 @@
 package apparatus.core.fix.alg
 
-import apparatus.core.fix.{Apparatus, ApparatusF}
+import apparatus.core.Apparatus
+import apparatus.core.fix.ApparatusF
 import cats.Monad
 
 object Mermaid:

@@ -32,7 +32,7 @@ final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) 
         val ns = self.evolve(o, state)
         (o, ns).pure
 
-  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = Apparatus.Stable[F, I, O](id, toBaseMachineT)
+  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = Apparatus.fresh[F, I, O](toBaseMachineT)
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {

@@ -70,7 +70,7 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   )
 
 def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
-  door.toApparatus[Id]("door") >>> Apparatus.Fresh(doorProject)
+  door.toApparatus[Id]("door") >>> Apparatus.fresh(doorProject)
 
 def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)

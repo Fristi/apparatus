@@ -1,8 +1,11 @@
 package apparatus.core.fix
 
-import apparatus.core.{BaseMachineT, Decider}
+import apparatus.core.{BaseMachineT, Decider, DeciderMaterializer}
 import apparatus.core.fix.HFix2
-import cats.{Foldable, Monoid}
+import apparatus.core.fix.alg.Mermaid
+import cats.arrow.{Category, Choice, Profunctor, Strong}
+import cats.{Applicative, Foldable, Monad, Monoid}
+import cats.implicits.*
 import zio.blocks.schema.Schema
 
 sealed trait ApparatusF[F[_, _], Eff[_], I, O]:
@@ -98,47 +101,3 @@ object ApparatusF:
 given [Eff[_]]: HFunctor2[[F[_, _], I, O] =>> ApparatusF[F, Eff, I, O]] with
   override def hfmap[F[_, _], G[_, _], I, O](nt: FunctionK2[F, G])(hfio: ApparatusF[F, Eff, I, O]): ApparatusF[G, Eff, I, O] =
     hfio.hfmap(nt)
-
-
-// ─── The fixed point type ────────────────────────────────────────────────────
-
-type Apparatus[Eff[_], I, O] = HFix2[[F[_, _], I, O] =>> ApparatusF[F, Eff, I, O], I, O]
-
-
-// ─── Smart constructors ──────────────────────────────────────────────────────
-
-object Apparatus:
-
-  def decider[Eff[_], I, E](networkId: String, d: Decider[?, I, List[E]])(using S: Schema[E]): Apparatus[Eff, I, List[E]] =
-    HFix2(ApparatusF.DeciderMachine(networkId, d, S))
-
-  def sequential[Eff[_], A, B, C](left: Apparatus[Eff, A, B], right: Apparatus[Eff, B, C]): Apparatus[Eff, A, C] =
-    HFix2(ApparatusF.Sequential(left, right))
-
-  def parallel[Eff[_], A, B, C, D](left: Apparatus[Eff, A, B], right: Apparatus[Eff, C, D]): Apparatus[Eff, (A, C), (B, D)] =
-    HFix2(ApparatusF.Parallel(left, right))
-
-  def alternative[Eff[_], A, B, C, D](left: Apparatus[Eff, A, B], right: Apparatus[Eff, C, D]): Apparatus[Eff, Either[A, C], Either[B, D]] =
-    HFix2(ApparatusF.Alternative(left, right))
-
-  def feedback[Eff[_], A, B, N[_]](
-    left: Apparatus[Eff, A, N[B]], right: Apparatus[Eff, B, N[A]]
-  )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[Eff, A, N[B]] =
-    HFix2(ApparatusF.Feedback(left, right, foldN, monoidNB, monoidNA))
-
-  def feedbackMany[Eff[_], A, B, N[_]](
-    left: Apparatus[Eff, A, N[B]], right: Apparatus[Eff, B, N[A]]
-  )(using foldN: Foldable[N], monoidNB: Monoid[N[B]], monoidNA: Monoid[N[A]]): Apparatus[Eff, N[A], N[B]] =
-    HFix2(ApparatusF.FeedbackMany(left, right, foldN, monoidNB, monoidNA))
-
-  def lmapOrEmpty[Eff[_], A, B, C](inner: Apparatus[Eff, A, B], pf: PartialFunction[C, A])(using mb: Monoid[B]): Apparatus[Eff, C, B] =
-    HFix2(ApparatusF.LmapOrEmpty(inner, pf, mb))
-
-  def merged[Eff[_], A, B](left: Apparatus[Eff, A, B], right: Apparatus[Eff, A, B])(using mb: Monoid[B]): Apparatus[Eff, A, B] =
-    HFix2(ApparatusF.Merged(left, right, mb))
-
-  def fresh[Eff[_], I, O](machine: BaseMachineT[Eff, I, O]): Apparatus[Eff, I, O] =
-    HFix2(ApparatusF.BaseMachine(machine))
-
-  def labeled[Eff[_], I, O](name: String)(inner: Apparatus[Eff, I, O]): Apparatus[Eff, I, O] =
-    HFix2(ApparatusF.Labeled(inner, name))

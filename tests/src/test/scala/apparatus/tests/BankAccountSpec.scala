@@ -47,7 +47,7 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
     yield ()
 
   def decider[F[_]]: Apparatus[F, BankAccountCommand, List[BankAccountEvent]] = 
-    Apparatus.DeciderMachine("bank-account", bankAccount)
+    Apparatus.deciderMachine("bank-account", bankAccount)
   
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] =
     val prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] = decider[ConnectionIO].tap(transactionsProjection(id, DoobieBankAccountTransactionRepository))

@@ -1,7 +1,7 @@
 package apparatus.core.fix.alg
 
-import apparatus.core.{BaseMachineT, DeciderMaterializer}
-import apparatus.core.fix.{Apparatus, ApparatusF, HFix2}
+import apparatus.core.{Apparatus, BaseMachineT, DeciderMaterializer}
+import apparatus.core.fix.{ApparatusF, HFix2}
 import cats.{Foldable, Monad, Monoid}
 import cats.data.{State, StateT}
 import cats.implicits.*

@@ -1,7 +1,6 @@
 package apparatus.tests
 
-import apparatus.core.BaseMachineT
-import apparatus.core.fix.Apparatus
+import apparatus.core.{Apparatus, BaseMachineT}
 import apparatus.core.fix.alg.Mermaid
 import cats.Id
 import cats.implicits.*
