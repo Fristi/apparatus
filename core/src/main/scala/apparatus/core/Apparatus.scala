@@ -1,7 +1,7 @@
 package apparatus.core
 
-import apparatus.core.{fix as fixPkg}
-import apparatus.core.fix.alg.{compile as fixCompile}
+import apparatus.core.fix as fixPkg
+import apparatus.core.fix.alg.{Mermaid, compile as fixCompile}
 import cats.*
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
@@ -154,6 +154,8 @@ extension [F[_], I, O](left: Apparatus[F, I, O]) {
     left.rmap[(O, O)](o => (o, o))
       .andThen(fixPkg.Apparatus.parallel(Apparatus.identity[F, O], right))
       .rmap[O](_._1)
+      
+  def mermaid: String = Mermaid.print(left)
 }
 
 extension [F[_], N[_], A, B](left: Apparatus[F, A, N[B]]) {
