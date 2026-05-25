@@ -48,6 +48,14 @@ trait OpenMealy[F[_], I, O] {
       override def action(state: State, input: H): F[(P, State)] =
         self.action(state, f(input)).map { case (b, s) => (g(b), s) }
     }
+
+  /** Return a copy of this machine with `s` as the initial state.
+    * Used by the runtime to bake the post-step state back into the returned Apparatus tree. */
+  final def atState(s: State): OpenMealy[F, I, O] =
+    new OpenMealy[F, I, O]:
+      type State = self.State
+      def initialState: State = s
+      def action(state: State, input: I): F[(O, State)] = self.action(state, input)
 }
 
 object OpenMealy:

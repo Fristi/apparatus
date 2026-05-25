@@ -63,36 +63,40 @@ object Apparatus:
 
   /** Run a single step. */
   def runA[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
-    alg.compile(mat)(fsm).flatMap { case (network, s0) =>
-      network.run(input).runA(s0)
+    alg.compile(mat)(fsm).flatMap { case (stepped, s0) =>
+      stepped.run(input).map(_._1).runA(s0)
     }
 
   /** Alias for [[runA]]. */
   def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
     runA(fsm, input, mat)
 
-  /** Fold over inputs, threading registry state across all steps. */
+  /** Fold over inputs, threading both DeciderStates and OpenMachine states across all steps. */
   def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
-                                                               fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
-                                                             ): F[O] =
-    alg.compile(mat)(fsm).flatMap { case (network, s0) =>
-      entries.foldM((Monoid[O].empty, s0)) { case ((acc, s), i) =>
-        network.run(i).run(s).map { case (s2, o) => (acc |+| o, s2) }
+    fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
+  ): F[O] =
+    alg.compile(mat)(fsm).flatMap { case (stepped0, s0) =>
+      entries.foldM((Monoid[O].empty, s0, stepped0)) { case ((acc, s, machine), i) =>
+        machine.run(i).run(s).map { case (s2, (o, nextMachine)) =>
+          (acc |+| o, s2, nextMachine)
+        }
       }.map(_._1)
     }
 
-  /** Run a sequence of inputs, threading registry state, returning all outputs in order. */
+  /** Run a sequence of inputs, threading all state, returning all outputs in order. */
   def runSteps[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], inputs: List[I], mat: DeciderMaterializer[F]): F[List[O]] =
-    alg.compile(mat)(fsm).flatMap { case (network, s0) =>
-      inputs.foldM((List.empty[O], s0)) { case ((acc, s), i) =>
-        network.run(i).run(s).map { case (s2, o) => (acc :+ o, s2) }
+    alg.compile(mat)(fsm).flatMap { case (stepped0, s0) =>
+      inputs.foldM((List.empty[O], s0, stepped0)) { case ((acc, s, machine), i) =>
+        machine.run(i).run(s).map { case (s2, (o, nextMachine)) =>
+          (acc :+ o, s2, nextMachine)
+        }
       }.map(_._1)
     }
 
   /** Alias for [[runMultipleA]]. */
   def runMultiple[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
-                                                              fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
-                                                            ): F[O] =
+    fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
+  ): F[O] =
     runMultipleA(fsm, entries, mat)
 
   // ── Cats instances ───────────────────────────────────────────────────────────
