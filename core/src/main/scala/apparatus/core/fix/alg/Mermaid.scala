@@ -61,6 +61,11 @@ object Mermaid:
         ctx.node(id, "Machine", Shape.Box)
         (id, id)
 
+      case ApparatusF.ClosedMachine(_) =>
+        val id = ctx.fresh("node")
+        ctx.node(id, "ClosedMachine", Shape.Stadium)
+        (id, id)
+
       case ApparatusF.Sequential(left, right) =>
         val (lIn, lOut) = render(left, ctx)
         val (rIn, rOut) = render(right, ctx)

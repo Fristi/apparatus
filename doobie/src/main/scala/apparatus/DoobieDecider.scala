@@ -1,7 +1,7 @@
 package apparatus
 
 import apparatus.core.*
-import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
+import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, MealyMachine, OpenMealy}
 import doobie.free.connection
 import doobie.free.connection.ConnectionIO
 import zio.blocks.schema.*
@@ -30,7 +30,7 @@ object EventStore {
           _ <- if (!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
         } yield {
           val closedMachine: ClosedMealy[ConnectionIO, I, List[O]] = new ClosedMealy[ConnectionIO, I, List[O]] {
-            override def action(input: I): ConnectionIO[(List[O], State)] =
+            override def action(input: I): ConnectionIO[List[O]] =
               for {
                 events <- eventStore.loadAggregateStream(networkId, aggregateId)
                 ns = decider.evolve(events.sortBy(_.sequenceNr).map(_.body), decider.state)
@@ -38,7 +38,7 @@ object EventStore {
                 nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
                 eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
                 _ <- eventStore.appendAggregateStream(networkId, aggregateId, eventStreamToAppend)
-              } yield (o, ns)
+              } yield o
           }
 
           MealyMachine.Closed(closedMachine)

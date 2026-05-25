@@ -60,29 +60,27 @@ object Apparatus:
 
   /** Run a single step. */
   def runA[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
-    alg.compile(mat)(fsm).flatMap { case (network, registry) =>
-      network.run(input).runA(registry)
-    }
+    alg.compile(mat)(fsm).flatMap(_.step(input).map(_._1))
 
   /** Alias for [[runA]]. */
   def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
     runA(fsm, input, mat)
 
-  /** Fold over inputs, threading registry state across all steps. */
+  /** Fold over inputs, threading machine state across all steps. */
   def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
                                                                fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
                                                              ): F[O] =
-    alg.compile(mat)(fsm).flatMap { case (network, initialRegistry) =>
-      entries.foldM((Monoid[O].empty, initialRegistry)) { case ((acc, registry), i) =>
-        network.run(i).run(registry).map { case (newRegistry, o) => (acc |+| o, newRegistry) }
+    alg.compile(mat)(fsm).flatMap { initial =>
+      entries.foldM((Monoid[O].empty, initial)) { case ((acc, network), i) =>
+        network.step(i).map { case (o, next) => (acc |+| o, next) }
       }.map(_._1)
     }
 
-  /** Run a sequence of inputs, threading registry state, returning all outputs in order. */
+  /** Run a sequence of inputs, threading machine state, returning all outputs in order. */
   def runSteps[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], inputs: List[I], mat: DeciderMaterializer[F]): F[List[O]] =
-    alg.compile(mat)(fsm).flatMap { case (network, initialRegistry) =>
-      inputs.foldM((List.empty[O], initialRegistry)) { case ((acc, registry), i) =>
-        network.run(i).run(registry).map { case (newRegistry, o) => (acc :+ o, newRegistry) }
+    alg.compile(mat)(fsm).flatMap { initial =>
+      inputs.foldM((List.empty[O], initial)) { case ((acc, network), i) =>
+        network.step(i).map { case (o, next) => (acc :+ o, next) }
       }.map(_._1)
     }
 
