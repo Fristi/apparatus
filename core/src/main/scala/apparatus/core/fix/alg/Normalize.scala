@@ -1,17 +1,14 @@
 package apparatus.core.fix.alg
 
-import apparatus.core.{Apparatus, BaseMachineT, DeciderMaterializer}
+import apparatus.core.Apparatus
 import apparatus.core.fix.{ApparatusF, HFix2}
+import apparatus.core.machines.{DeciderMaterializer, MealyMachine, OpenMealy}
 import cats.{Foldable, Monad, Monoid}
 import cats.data.{State, StateT}
 import cats.implicits.*
 
 type NormalizedRegistry[F[_]] = Map[String, DeciderEntry[F]]
 
-/**
- * Traverses `apparatus`, collects every `DeciderMachine`/`BaseMachine` node into a registry,
- * and returns a rewritten tree where each is replaced by a `Ref`.
- */
 def normalize[F[_] : Monad, I, O](apparatus: Apparatus[F, I, O]): (NormalizedRegistry[F], Apparatus[F, I, O]) =
   go(apparatus).run(Map.empty).value
 
@@ -20,18 +17,16 @@ private def go[F[_] : Monad, I, O](apparatus: Apparatus[F, I, O]): State[Normali
 
     case ApparatusF.DeciderMachine(networkId, decider, schema) =>
       val entry = new DeciderEntry[F]:
-        def materialize(m: DeciderMaterializer[F]): F[BaseMachineT[F, ?, ?]] =
-          m.materialize(decider, networkId)(using schema).asInstanceOf[F[BaseMachineT[F, ?, ?]]]
+        def materialize(m: DeciderMaterializer[F]): F[MealyMachine[F, ?, ?]] =
+          m.materialize(decider, networkId)(using schema).asInstanceOf[F[MealyMachine[F, ?, ?]]]
       State.modify[NormalizedRegistry[F]](_ + (networkId -> entry))
         .as(HFix2(ApparatusF.Ref(networkId)))
 
-    case ApparatusF.BaseMachine(machine) => // machine: BaseMachineT[F, I, O] — effect type known, no cast
-      val id = java.util.UUID.randomUUID().toString
-      val entry = new DeciderEntry[F]:
-        def materialize(m: DeciderMaterializer[F]): F[BaseMachineT[F, ?, ?]] =
-          machine.pure[F].asInstanceOf[F[BaseMachineT[F, ?, ?]]]
-      State.modify[NormalizedRegistry[F]](_ + (id -> entry))
-        .as(HFix2(ApparatusF.Ref(id)))
+    case ApparatusF.ClosedMachine(machine) =>
+      StateT.pure(HFix2(ApparatusF.ClosedMachine(machine)))
+
+    case ApparatusF.OpenMachine(machine) =>
+      StateT.pure(HFix2(ApparatusF.OpenMachine(machine)))
 
     case ApparatusF.Ref(networkId) =>
       StateT.pure(HFix2(ApparatusF.Ref(networkId)))

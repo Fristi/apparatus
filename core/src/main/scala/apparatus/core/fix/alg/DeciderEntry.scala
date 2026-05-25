@@ -1,6 +1,6 @@
 package apparatus.core.fix.alg
 
-import apparatus.core.{BaseMachineT, DeciderMaterializer}
+import apparatus.core.machines.{ClosedMealy, DeciderMaterializer, MealyMachine, OpenMealy}
 
 trait DeciderEntry[F[_]]:
-  def materialize(m: DeciderMaterializer[F]): F[BaseMachineT[F, ?, ?]]
+  def materialize(m: DeciderMaterializer[F]): F[MealyMachine[F, ?, ?]]

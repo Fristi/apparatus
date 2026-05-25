@@ -1,5 +1,7 @@
 package apparatus.core.fix
 
+import apparatus.core.patterns
+
 final case class HFix2[H[_[_, _], _, _], I, O](unfix: H[[A, B] =>> HFix2[H, A, B], I, O])
 
 trait FunctionK2[F[_, _], G[_, _]] {

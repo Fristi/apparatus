@@ -1,6 +1,8 @@
 package apparatus.core
 
+import apparatus.core.patterns
 import cats.Applicative
+
 import scala.deriving.Mirror
 
 /** Bidirectional, lossless isomorphism between types `A` and `B`.

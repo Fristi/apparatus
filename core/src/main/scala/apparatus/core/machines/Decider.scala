@@ -1,7 +1,7 @@
-package apparatus.core
+package apparatus.core.machines
 
-import cats.{Applicative, Id, MonadError}
-import cats.implicits.*
+import apparatus.core.Apparatus
+import cats.Id
 import zio.blocks.schema.Schema
 
 /** Pure, effect-free state machine following the Decider pattern.
@@ -23,8 +23,8 @@ import zio.blocks.schema.Schema
  * @param evolve pure function `(output, state) => newState`
  */
 final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) => S) { self =>
-  def toBaseMachineT: BaseMachineT[Id, I, O] {type State = S} =
-    new BaseMachineT[Id, I, O]:
+  def toOpenMealy: OpenMealy[Id, I, O] {type State = S} =
+    new OpenMealy[Id, I, O]:
       override type State = S
       override def initialState: S = self.state
       override def action(state: State, input: I): Id[(O, State)] =
@@ -32,7 +32,7 @@ final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) 
         val ns = self.evolve(o, state)
         (o, ns)
 
-  def toApparatus(id: String): Apparatus[Id, I, O] = Apparatus.fresh[Id, I, O](toBaseMachineT)
+  def toApparatus(id: String): Apparatus[Id, I, O] = Apparatus.openMealy[Id, I, O](toOpenMealy)
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
@@ -86,12 +86,19 @@ extension [S, I, O](decider: Decider[S, I, List[O]]) {
     )
 }
 
+
+
+enum MealyMachine[F[_], I, O]:
+  case Open(open: OpenMealy[F, I, O])
+  case Closed(closed: ClosedMealy[F, I, O])
+  
 trait DeciderMaterializer[F[_]] {
-  def materialize[S, I, O : Schema](apparatus: Decider[S, I, List[O]], networkId: String): F[BaseMachineT[F, I, List[O]]]
+  def materialize[S, I, O : Schema](apparatus: Decider[S, I, List[O]], networkId: String): F[MealyMachine[F, I, List[O]]]
 }
 
 object DeciderMaterializer {
   val id: DeciderMaterializer[Id] = new DeciderMaterializer[Id] {
-    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[BaseMachineT[Id, I, List[O]]] = apparatus.toBaseMachineT
+    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[MealyMachine[Id, I, List[O]]] = 
+      MealyMachine.Open(apparatus.toOpenMealy)
   }
 }

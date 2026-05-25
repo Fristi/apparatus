@@ -1,8 +1,10 @@
 package apparatus.core
 
+import apparatus.core
 import apparatus.core.fix.alg.Mermaid
 import apparatus.core.fix.{ApparatusF, HFix2, alg}
-import apparatus.core.{BaseMachineT, Decider, DeciderMaterializer, Iso}
+import apparatus.core.machines.{Decider, DeciderMaterializer, OpenMealy}
+import apparatus.core.Iso
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
 import cats.{Applicative, Foldable, Monad, Monoid}
@@ -45,14 +47,14 @@ object Apparatus:
   def merged[Eff[_], A, B](left: Apparatus[Eff, A, B], right: Apparatus[Eff, A, B])(using mb: Monoid[B]): Apparatus[Eff, A, B] =
     HFix2(ApparatusF.Merged(left, right, mb))
 
-  def fresh[Eff[_], I, O](machine: BaseMachineT[Eff, I, O]): Apparatus[Eff, I, O] =
-    HFix2(ApparatusF.BaseMachine(machine))
+  def openMealy[Eff[_], I, O](machine: OpenMealy[Eff, I, O]): Apparatus[Eff, I, O] =
+    HFix2(ApparatusF.OpenMachine(machine))
 
   def labeled[Eff[_], I, O](name: String)(inner: Apparatus[Eff, I, O]): Apparatus[Eff, I, O] =
     HFix2(ApparatusF.Labeled(inner, name))
 
   def identity[F[_] : Applicative, A]: Apparatus[F, A, A] =
-    fresh(BaseMachineT.stateless[F, A, A](_.pure))
+    openMealy(OpenMealy.stateless[F, A, A](_.pure))
 
   // ── Run methods ─────────────────────────────────────────────────────────────
 
@@ -148,14 +150,14 @@ extension [F[_], I, O](left: Apparatus[F, I, O]) {
 
   def lmap[C](f: C => I)(using Applicative[F]): Apparatus[F, C, O] =
     Apparatus.sequential(
-      Apparatus.fresh(BaseMachineT.stateless[F, C, I](c => f(c).pure)),
+      Apparatus.openMealy(OpenMealy.stateless[F, C, I](c => f(c).pure)),
       left
     )
 
   def rmap[C](f: O => C)(using Applicative[F]): Apparatus[F, I, C] =
     Apparatus.sequential(
       left,
-      Apparatus.fresh(BaseMachineT.stateless[F, O, C](o => f(o).pure))
+      Apparatus.openMealy(OpenMealy.stateless[F, O, C](o => f(o).pure))
     )
 
   def dimap[C, D](f: C => I)(g: O => D)(using Applicative[F]): Apparatus[F, C, D] =

@@ -1,5 +1,7 @@
-package apparatus.core
+package apparatus.core.patterns
 
+import apparatus.core.*
+import apparatus.core.machines.{Decider, DeciderBuilder, evolveList}
 import cats.*
 import cats.data.NonEmptySet
 import cats.implicits.*

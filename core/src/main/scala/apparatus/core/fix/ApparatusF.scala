@@ -1,6 +1,7 @@
 package apparatus.core.fix
 
-import apparatus.core.{BaseMachineT, Decider}
+import apparatus.core
+import apparatus.core.machines.{ClosedMealy, Decider, OpenMealy}
 import cats.{Foldable, Monoid}
 import zio.blocks.schema.Schema
 
@@ -11,12 +12,13 @@ object ApparatusF:
 
   final case class Ref[F[_, _], Eff[_], I, O](networkId: String) extends ApparatusF[F, Eff, I, O]:
     def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O] = Ref(networkId)
+  
+  final case class OpenMachine[F[_, _], Eff[_], I, O](machine: OpenMealy[Eff, I, O]) extends ApparatusF[F, Eff, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O] = OpenMachine(machine)
 
-  /** Machine carrying its effect type directly — no erasure. */
-  final case class BaseMachine[F[_, _], Eff[_], I, O](machine: BaseMachineT[Eff, I, O]) extends ApparatusF[F, Eff, I, O]:
-    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O] = BaseMachine(machine)
+  final case class ClosedMachine[F[_, _], Eff[_], I, O](machine: ClosedMealy[Eff, I, O]) extends ApparatusF[F, Eff, I, O]:
+    def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O] = ClosedMachine(machine)
 
-  /** Event-sourced machine. `E` is the element type; output of the apparatus is `List[E]`. */
   final case class DeciderMachine[F[_, _], Eff[_], I, E](
     networkId: String,
     decider:   Decider[?, I, List[E]],
@@ -91,9 +93,6 @@ object ApparatusF:
     def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O] =
       Labeled(nt(inner), name)
 
-
-// ─── HFunctor2 instance ──────────────────────────────────────────────────────
-
-given [Eff[_]]: HFunctor2[[F[_, _], I, O] =>> ApparatusF[F, Eff, I, O]] with
-  override def hfmap[F[_, _], G[_, _], I, O](nt: FunctionK2[F, G])(hfio: ApparatusF[F, Eff, I, O]): ApparatusF[G, Eff, I, O] =
-    hfio.hfmap(nt)
+  given [Eff[_]]: HFunctor2[[F[_, _], I, O] =>> ApparatusF[F, Eff, I, O]] with
+    override def hfmap[F[_, _], G[_, _], I, O](nt: FunctionK2[F, G])(hfio: ApparatusF[F, Eff, I, O]): ApparatusF[G, Eff, I, O] =
+      hfio.hfmap(nt)

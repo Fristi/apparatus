@@ -1,6 +1,8 @@
 package apparatus.tests
 
 import apparatus.core.*
+import apparatus.core.machines.*
+import apparatus.core.patterns.*
 import cats.Id
 import cats.implicits.*
 import cats.kernel.Monoid
@@ -57,8 +59,8 @@ val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
     .decide[DoorCommand, List[DoorEvent]](_.decide(_))
     .evolveList(_.evolve(_))
 
-val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
-  BaseMachineT.apply[Id, DoorStats, List[DoorEvent], DoorStats](
+val doorProject: OpenMealy[Id, List[DoorEvent], DoorStats] =
+  OpenMealy.apply[Id, DoorStats, List[DoorEvent], DoorStats](
     DoorStats(0, 0),
     (s, i) =>
       val res = i.foldLeft(s)((s, ev) => ev match
@@ -70,7 +72,7 @@ val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
   )
 
 def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
-  door.toApparatus("door") >>> Apparatus.fresh(doorProject)
+  door.toApparatus("door") >>> Apparatus.openMealy(doorProject)
 
 def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)

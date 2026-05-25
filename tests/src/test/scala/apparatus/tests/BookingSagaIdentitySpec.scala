@@ -1,6 +1,8 @@
 package apparatus.tests
 
 import apparatus.core.*
+import apparatus.core.machines.*
+import apparatus.core.patterns.*
 import apparatus.examples.*
 import cats.Id
 import cats.data.NonEmptySet

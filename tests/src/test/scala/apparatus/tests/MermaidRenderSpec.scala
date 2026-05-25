@@ -1,10 +1,12 @@
 package apparatus.tests
 
-import apparatus.core.{Apparatus, BaseMachineT}
+import apparatus.core.{Apparatus}
 import apparatus.core.fix.alg.Mermaid
+import apparatus.core.machines.OpenMealy
 import cats.Id
 import cats.implicits.*
 import munit.FunSuite
+
 import sys.process.*
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -18,7 +20,7 @@ class MermaidRenderSpec extends FunSuite:
   // ── helpers ──────────────────────────────────────────────────────────────────
 
   private def node[I, O](f: I => O): Apparatus[Id, I, O] =
-    Apparatus.fresh(BaseMachineT.stateless[Id, I, O](i => f(i)))
+    Apparatus.openMealy(OpenMealy.stateless[Id, I, O](i => f(i)))
 
   private def named[I, O](label: String)(f: I => O): Apparatus[Id, I, O] =
     Apparatus.labeled(label)(node(f))

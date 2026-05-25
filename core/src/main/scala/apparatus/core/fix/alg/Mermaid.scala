@@ -1,5 +1,6 @@
 package apparatus.core.fix.alg
 
+import apparatus.core
 import apparatus.core.Apparatus
 import apparatus.core.fix.ApparatusF
 import cats.Monad
@@ -11,8 +12,6 @@ object Mermaid:
     val ctx = Context()
     render(normalized, ctx)
     "graph TD\n" + ctx.declarations.mkString("\n") + "\n" + ctx.edges.mkString("\n")
-
-  // ── internals ──────────────────────────────────────────────────────────────
 
   private class Context:
     private var counter = 0
@@ -57,7 +56,7 @@ object Mermaid:
         ctx.node(id, networkId, Shape.Box)
         (id, id)
 
-      case ApparatusF.BaseMachine(_) =>
+      case ApparatusF.OpenMachine(_) =>
         val id = ctx.fresh("node")
         ctx.node(id, "Machine", Shape.Box)
         (id, id)
@@ -149,5 +148,5 @@ object Mermaid:
   private def isLeaf[Eff[_], I, O](apparatus: Apparatus[Eff, I, O]): Boolean =
     apparatus.unfix match
       case _: ApparatusF.Ref[?, ?, ?, ?]         => true
-      case _: ApparatusF.BaseMachine[?, ?, ?, ?] => true
+      case _: ApparatusF.OpenMachine[?, ?, ?, ?] => true
       case _                                     => false

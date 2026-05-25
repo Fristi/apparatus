@@ -1,27 +1,29 @@
 package apparatus.core.fix.alg
 
-import apparatus.core.{Apparatus, BaseMachineT, DeciderMaterializer}
-import apparatus.core.fix.{cata2, ApparatusF, HAlgebra2, given}
-import cats.{Foldable, Monad, Monoid}
-import cats.implicits.*
+import apparatus.core.Apparatus
+import apparatus.core.fix.alg.NormalizedRegistry
+import apparatus.core.fix.{ApparatusF, HAlgebra2, cata2}
+import apparatus.core.machines.{DeciderMaterializer, OpenMealy}
 import cats.data.{Kleisli, StateT}
+import cats.implicits.*
+import cats.{Foldable, Monad, Monoid}
 
 final case class NetworkState[F[_]](
-                                     deciders: Map[String, BaseMachineT[F, ?, ?]],
+                                     deciders: Map[String, OpenMealy[F, ?, ?]],
                                      states: Map[String, Any]
                                    ) {
   def withUpdatedState(id: String, state: Any): NetworkState[F] =
     copy(states = states + (id -> state))
 }
 
-type CompiledNetwork[F[_], I, O] = Kleisli[[z] =>> StateT[F, NetworkState[F], z], I, O]
+type CompiledNetwork[F[_], I, O] = Kleisli[F, I, (O, Apparatus[F, I, O])]
 
 private def evalAlg[F[_] : Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F, I, O], [I, O] =>> CompiledNetwork[F, I, O]] =
   [I, O] => (node: ApparatusF[[x, y] =>> CompiledNetwork[F, x, y], F, I, O]) => node match {
     case ApparatusF.DeciderMachine(_, _, _) =>
       sys.error("DeciderMachine reached evalAlg — normalize must be called first")
 
-    case ApparatusF.BaseMachine(machine) =>
+    case ApparatusF.OpenMachine(machine) =>
       sys.error("BaseMachine reached evalAlg — normalize must be called first")
 
     case ApparatusF.Sequential(left, right) =>
@@ -59,7 +61,7 @@ private def evalAlg[F[_] : Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F
       Kleisli { input =>
         for {
           registry <- StateT.get[F, NetworkState[F]]
-          machine:BaseMachineT[F, I, O] = registry.deciders(networkId).asInstanceOf[BaseMachineT[F, I, O]]
+          machine:OpenMealy[F, I, O] = registry.deciders(networkId).asInstanceOf[OpenMealy[F, I, O]]
           state = registry.states.getOrElse(networkId, machine.initialState).asInstanceOf[machine.State]
           (o, newState) <- StateT.liftF(machine.action(state, input))
           _ <- StateT.modify[F, NetworkState[F]](_.withUpdatedState(networkId, newState))
@@ -96,7 +98,7 @@ private def feedbackLoop[F[_] : Monad, A, B, N[_]](
                                                     monoidNA: Monoid[N[A]]
                                                   ): CompiledNetwork[F, A, N[B]] =
   Kleisli { a =>
-    def loop(pending: List[A], acc: N[B]): StateT[F, NetworkState[F], N[B]] =
+    def loop(pending: List[A], acc: N[B]) =
       pending match
         case Nil => acc.pure
         case head :: tail =>
@@ -119,7 +121,7 @@ private def feedbackManyLoop[F[_] : Monad, A, B, N[_]](
                                                         monoidNA: Monoid[N[A]]
                                                       ): CompiledNetwork[F, N[A], N[B]] =
   Kleisli { nas =>
-    def loop(pending: List[A], acc: N[B]): StateT[F, NetworkState[F], N[B]] =
+    def loop(pending: List[A], acc: N[B]) =
       pending match
         case Nil => acc.pure
         case head :: tail =>

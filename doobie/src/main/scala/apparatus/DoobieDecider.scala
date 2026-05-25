@@ -1,6 +1,7 @@
 package apparatus
 
 import apparatus.core.*
+import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
 import doobie.free.connection
 import doobie.free.connection.ConnectionIO
 import zio.blocks.schema.*
@@ -23,24 +24,24 @@ trait EventStore[F[_]]:
 object EventStore {
   def deciderMaterializer(eventStore: EventStore[ConnectionIO], aggregateId: UUID): DeciderMaterializer[ConnectionIO] =
     new DeciderMaterializer[ConnectionIO] {
-      override def materialize[S, I, O: Schema](decider: Decider[S, I, List[O]], networkId: String): ConnectionIO[BaseMachineT[ConnectionIO, I, List[O]]] =
+      override def materialize[S, I, O: Schema](decider: Decider[S, I, List[O]], networkId: String): ConnectionIO[MealyMachine[ConnectionIO, I, List[O]]] =
         for {
           acquired <- eventStore.lockAggregate(networkId, aggregateId)
           _ <- if (!acquired) connection.raiseError(new Throwable("Cannot acquire lock")) else connection.unit
         } yield {
-          new BaseMachineT[ConnectionIO, I, List[O]] {
-            override type State = S
-            override def initialState: S = decider.state
-            override def action(_state: State, input: I): ConnectionIO[(List[O], State)] =
+          val closedMachine: ClosedMealy[ConnectionIO, I, List[O]] = new ClosedMealy[ConnectionIO, I, List[O]] {
+            override def action(input: I): ConnectionIO[(List[O], State)] =
               for {
                 events <- eventStore.loadAggregateStream(networkId, aggregateId)
-                ns = decider.evolve(events.sortBy(_.sequenceNr).map(_.body), initialState) // TODO: this is weird .. to reference to initialstate
+                ns = decider.evolve(events.sortBy(_.sequenceNr).map(_.body), decider.state)
                 o = decider.decide(input, ns)
                 nextSequenceNr = events.maxByOption(_.sequenceNr).map(_.sequenceNr + 1).getOrElse(0)
                 eventStreamToAppend = o.zipWithIndex.map((o, idx) => EventEntry(nextSequenceNr + idx, o))
                 _ <- eventStore.appendAggregateStream(networkId, aggregateId, eventStreamToAppend)
               } yield (o, ns)
           }
+
+          MealyMachine.Closed(closedMachine)
         }
     }
 }

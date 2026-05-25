@@ -1,6 +1,8 @@
 package apparatus.examples
 
 import apparatus.core.*
+import apparatus.core.machines.*
+import apparatus.core.patterns.*
 import cats.*
 import cats.data.NonEmptySet
 import cats.implicits.*

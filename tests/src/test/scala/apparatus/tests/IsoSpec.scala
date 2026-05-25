@@ -1,6 +1,8 @@
 package apparatus.tests
 
 import apparatus.core.*
+import apparatus.core.machines.*
+import apparatus.core.patterns.*
 import cats.Id
 import cats.implicits.*
 
@@ -23,12 +25,12 @@ case class Out(a: Boolean, b: Double)
 
 // --- fixtures ---
 
-val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.fresh(BaseMachineT.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
-val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.fresh(BaseMachineT.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
-val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.fresh(BaseMachineT.stateless[Id, Reset, WasReset](_ => WasReset()))
+val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.openMealy(OpenMealy.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
+val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.openMealy(OpenMealy.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
+val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.openMealy(OpenMealy.stateless[Id, Reset, WasReset](_ => WasReset()))
 
-val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.fresh(BaseMachineT.stateless[Id, Int,    Boolean](n => n > 0))
-val strFsm:  Apparatus[Id, String, Double]  = Apparatus.fresh(BaseMachineT.stateless[Id, String, Double](_.toDouble))
+val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.openMealy(OpenMealy.stateless[Id, Int,    Boolean](n => n > 0))
+val strFsm:  Apparatus[Id, String, Double]  = Apparatus.openMealy(OpenMealy.stateless[Id, String, Double](_.toDouble))
 
 // --- tests ---
 
@@ -83,7 +85,7 @@ class IsoSpec extends munit.FunSuite:
 
   test("imap preserves state across steps"):
     val accumFsm: Apparatus[Id, Inc, Incremented] =
-      Apparatus.fresh(BaseMachineT[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
+      Apparatus.openMealy(OpenMealy[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
 
     val adtFsm: Apparatus[Id, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
 

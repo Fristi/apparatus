@@ -1,6 +1,7 @@
 package apparatus.tests
 
 import apparatus.core.*
+import apparatus.core.patterns.{SagaEvent, SagaStepResult}
 import apparatus.examples.*
 import apparatus.{EventStore, PostgresEventStore}
 import cats.data.NonEmptySet
