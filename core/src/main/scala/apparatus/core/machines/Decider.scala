@@ -31,8 +31,7 @@ final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) 
         val o = self.decide(input, state)
         val ns = self.evolve(o, state)
         (o, ns)
-
-  def toApparatus(id: String): Apparatus[Id, I, O] = Apparatus.openMealy[Id, I, O](toOpenMealy)
+  
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
@@ -98,7 +97,7 @@ trait DeciderMaterializer[F[_]] {
 
 object DeciderMaterializer {
   val id: DeciderMaterializer[Id] = new DeciderMaterializer[Id] {
-    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[MealyMachine[Id, I, List[O]]] = 
+    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[MealyMachine[Id, I, List[O]]] =
       MealyMachine.Open(apparatus.toOpenMealy)
   }
 }

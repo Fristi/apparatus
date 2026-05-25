@@ -25,12 +25,12 @@ case class Out(a: Boolean, b: Double)
 
 // --- fixtures ---
 
-val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.openMealy(OpenMealy.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
-val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.openMealy(OpenMealy.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
-val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.openMealy(OpenMealy.stateless[Id, Reset, WasReset](_ => WasReset()))
+val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.closedMealy(ClosedMealy.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
+val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.closedMealy(ClosedMealy.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
+val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.closedMealy(ClosedMealy.stateless[Id, Reset, WasReset](_ => WasReset()))
 
-val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.openMealy(OpenMealy.stateless[Id, Int,    Boolean](n => n > 0))
-val strFsm:  Apparatus[Id, String, Double]  = Apparatus.openMealy(OpenMealy.stateless[Id, String, Double](_.toDouble))
+val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.closedMealy(ClosedMealy.stateless[Id, Int,    Boolean](n => n > 0))
+val strFsm:  Apparatus[Id, String, Double]  = Apparatus.closedMealy(ClosedMealy.stateless[Id, String, Double](_.toDouble))
 
 // --- tests ---
 

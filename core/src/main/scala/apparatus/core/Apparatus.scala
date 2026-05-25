@@ -3,7 +3,7 @@ package apparatus.core
 import apparatus.core
 import apparatus.core.fix.alg.Mermaid
 import apparatus.core.fix.{ApparatusF, HFix2, alg}
-import apparatus.core.machines.{Decider, DeciderMaterializer, OpenMealy}
+import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
 import apparatus.core.Iso
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.implicits.*
@@ -50,37 +50,42 @@ object Apparatus:
   def openMealy[Eff[_], I, O](machine: OpenMealy[Eff, I, O]): Apparatus[Eff, I, O] =
     HFix2(ApparatusF.OpenMachine(machine))
 
+  def closedMealy[Eff[_], I, O](machine: ClosedMealy[Eff, I, O]): Apparatus[Eff, I, O] =
+    HFix2(ApparatusF.ClosedMachine(machine))
+
   def labeled[Eff[_], I, O](name: String)(inner: Apparatus[Eff, I, O]): Apparatus[Eff, I, O] =
     HFix2(ApparatusF.Labeled(inner, name))
 
   def identity[F[_] : Applicative, A]: Apparatus[F, A, A] =
-    openMealy(OpenMealy.stateless[F, A, A](_.pure))
+    closedMealy(ClosedMealy.stateless[F, A, A](_.pure))
 
   // ── Run methods ─────────────────────────────────────────────────────────────
 
   /** Run a single step. */
   def runA[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
-    alg.compile(mat)(fsm).flatMap(_.step(input).map(_._1))
+    alg.compile(mat)(fsm).flatMap { case (network, s0) =>
+      network.run(input).runA(s0)
+    }
 
   /** Alias for [[runA]]. */
   def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
     runA(fsm, input, mat)
 
-  /** Fold over inputs, threading machine state across all steps. */
+  /** Fold over inputs, threading registry state across all steps. */
   def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
                                                                fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
                                                              ): F[O] =
-    alg.compile(mat)(fsm).flatMap { initial =>
-      entries.foldM((Monoid[O].empty, initial)) { case ((acc, network), i) =>
-        network.step(i).map { case (o, next) => (acc |+| o, next) }
+    alg.compile(mat)(fsm).flatMap { case (network, s0) =>
+      entries.foldM((Monoid[O].empty, s0)) { case ((acc, s), i) =>
+        network.run(i).run(s).map { case (s2, o) => (acc |+| o, s2) }
       }.map(_._1)
     }
 
-  /** Run a sequence of inputs, threading machine state, returning all outputs in order. */
+  /** Run a sequence of inputs, threading registry state, returning all outputs in order. */
   def runSteps[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], inputs: List[I], mat: DeciderMaterializer[F]): F[List[O]] =
-    alg.compile(mat)(fsm).flatMap { initial =>
-      inputs.foldM((List.empty[O], initial)) { case ((acc, network), i) =>
-        network.step(i).map { case (o, next) => (acc :+ o, next) }
+    alg.compile(mat)(fsm).flatMap { case (network, s0) =>
+      inputs.foldM((List.empty[O], s0)) { case ((acc, s), i) =>
+        network.run(i).run(s).map { case (s2, o) => (acc :+ o, s2) }
       }.map(_._1)
     }
 
@@ -148,14 +153,14 @@ extension [F[_], I, O](left: Apparatus[F, I, O]) {
 
   def lmap[C](f: C => I)(using Applicative[F]): Apparatus[F, C, O] =
     Apparatus.sequential(
-      Apparatus.openMealy(OpenMealy.stateless[F, C, I](c => f(c).pure)),
+      Apparatus.closedMealy(ClosedMealy.stateless[F, C, I](c => f(c).pure)),
       left
     )
 
   def rmap[C](f: O => C)(using Applicative[F]): Apparatus[F, I, C] =
     Apparatus.sequential(
       left,
-      Apparatus.openMealy(OpenMealy.stateless[F, O, C](o => f(o).pure))
+      Apparatus.closedMealy(ClosedMealy.stateless[F, O, C](o => f(o).pure))
     )
 
   def dimap[C, D](f: C => I)(g: O => D)(using Applicative[F]): Apparatus[F, C, D] =

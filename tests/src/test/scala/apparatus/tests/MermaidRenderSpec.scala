@@ -1,8 +1,8 @@
 package apparatus.tests
 
-import apparatus.core.{Apparatus}
+import apparatus.core.Apparatus
 import apparatus.core.fix.alg.Mermaid
-import apparatus.core.machines.OpenMealy
+import apparatus.core.machines.{ClosedMealy, OpenMealy}
 import cats.Id
 import cats.implicits.*
 import munit.FunSuite
@@ -20,7 +20,7 @@ class MermaidRenderSpec extends FunSuite:
   // ── helpers ──────────────────────────────────────────────────────────────────
 
   private def node[I, O](f: I => O): Apparatus[Id, I, O] =
-    Apparatus.openMealy(OpenMealy.stateless[Id, I, O](i => f(i)))
+    Apparatus.closedMealy(ClosedMealy.stateless[Id, I, O](i => f(i)))
 
   private def named[I, O](label: String)(f: I => O): Apparatus[Id, I, O] =
     Apparatus.labeled(label)(node(f))

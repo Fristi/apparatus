@@ -59,10 +59,6 @@ object OpenMealy:
       def initialState: S = seed
       def action(state: S, input: I): F[(O, S)] = f(state, input)
 
-  /** Construct a machine with no meaningful state (unit state `Tuple`). */
-  def stateless[F[_]: Functor, I, O](f: I => F[O]): OpenMealy[F, I, O] =
-    apply[F, Tuple, I, O](Tuple(), (_, i) => f(i).map(o => (o, Tuple())))
-
   /** `Profunctor` instance: `lmap` adapts the input, `rmap` adapts the output. */
   implicit def profunctor[F[_]: Functor]: Profunctor[[A, B] =>> OpenMealy[F, A, B]] =
     new Profunctor[[A, B] =>> OpenMealy[F, A, B]]:

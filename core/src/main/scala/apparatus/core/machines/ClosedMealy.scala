@@ -7,7 +7,6 @@ import cats.{Functor, ~>}
 
 trait ClosedMealy[F[_], I, O] { self =>
 
-  /** Transition function: given current state and input, return output + next state. */
   def action(input: I): F[O]
 
   final def mapK[G[_]](f: F ~> G): ClosedMealy[G, I, O] =
@@ -31,6 +30,12 @@ trait ClosedMealy[F[_], I, O] { self =>
 }
 
 object ClosedMealy:
+
+  def stateless[F[_]: Functor, I, O](f: I => F[O]): ClosedMealy[F, I, O] =
+    new ClosedMealy[F, I, O] {
+      override def action(input: I): F[O] = f(input)
+    }
+  
   /** `Profunctor` instance: `lmap` adapts the input, `rmap` adapts the output. */
   implicit def profunctor[F[_]: Functor]: Profunctor[[A, B] =>> ClosedMealy[F, A, B]] =
     new Profunctor[[A, B] =>> ClosedMealy[F, A, B]]:

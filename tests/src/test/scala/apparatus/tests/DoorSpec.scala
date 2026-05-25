@@ -2,10 +2,10 @@ package apparatus.tests
 
 import apparatus.core.*
 import apparatus.core.machines.*
-import apparatus.core.patterns.*
 import cats.Id
 import cats.implicits.*
 import cats.kernel.Monoid
+import zio.blocks.schema.Schema
 
 // --- Domain model ---
 
@@ -36,7 +36,7 @@ enum DoorCommand:
   case Knock
   case Close
 
-enum DoorEvent:
+enum DoorEvent derives Schema:
   case Knocked
   case Opened
   case Closed
@@ -72,7 +72,7 @@ val doorProject: OpenMealy[Id, List[DoorEvent], DoorStats] =
   )
 
 def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
-  door.toApparatus("door") >>> Apparatus.openMealy(doorProject)
+  Apparatus.deciderMachine("door", door) >>> Apparatus.openMealy(doorProject)
 
 def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)
