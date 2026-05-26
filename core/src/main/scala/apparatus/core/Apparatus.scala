@@ -6,6 +6,7 @@ import apparatus.core.fix.{ApparatusF, HFix2, alg}
 import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
 import apparatus.core.Iso
 import cats.arrow.{Category, Choice, Profunctor, Strong}
+import cats.effect.kernel.Ref
 import cats.implicits.*
 import cats.{Applicative, Foldable, Monad, Monoid}
 import zio.blocks.schema.Schema
@@ -62,39 +63,29 @@ object Apparatus:
   // ── Run methods ─────────────────────────────────────────────────────────────
 
   /** Run a single step. */
-  def runA[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
-    alg.compile(mat)(fsm).flatMap { case (stepped, s0) =>
-      stepped.run(input).map(_._1).runA(s0)
-    }
+  def runA[F[_]: {Monad, Ref.Make}, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
+    alg.compile(mat)(fsm).flatMap(_.run(input))
 
   /** Alias for [[runA]]. */
-  def run[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
+  def run[F[_]: {Monad, Ref.Make}, I, O](fsm: Apparatus[F, I, O], input: I, mat: DeciderMaterializer[F]): F[O] =
     runA(fsm, input, mat)
 
-  /** Fold over inputs, threading both DeciderStates and OpenMachine states across all steps. */
-  def runMultipleA[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
+  /** Fold over inputs, threading state via Refs allocated at compile time. */
+  def runMultipleA[F[_]: {Monad, Ref.Make}, M[_]: Foldable, I, O: Monoid](
     fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
   ): F[O] =
-    alg.compile(mat)(fsm).flatMap { case (stepped0, s0) =>
-      entries.foldM((Monoid[O].empty, s0, stepped0)) { case ((acc, s, machine), i) =>
-        machine.run(i).run(s).map { case (s2, (o, nextMachine)) =>
-          (acc |+| o, s2, nextMachine)
-        }
-      }.map(_._1)
+    alg.compile(mat)(fsm).flatMap { network =>
+      entries.foldM(Monoid[O].empty)((acc, i) => network.run(i).map(acc |+| _))
     }
 
-  /** Run a sequence of inputs, threading all state, returning all outputs in order. */
-  def runSteps[F[_]: Monad, I, O](fsm: Apparatus[F, I, O], inputs: List[I], mat: DeciderMaterializer[F]): F[List[O]] =
-    alg.compile(mat)(fsm).flatMap { case (stepped0, s0) =>
-      inputs.foldM((List.empty[O], s0, stepped0)) { case ((acc, s, machine), i) =>
-        machine.run(i).run(s).map { case (s2, (o, nextMachine)) =>
-          (acc :+ o, s2, nextMachine)
-        }
-      }.map(_._1)
+  /** Run a sequence of inputs, returning all outputs in order. State is threaded via Refs. */
+  def runSteps[F[_]: {Monad, Ref.Make}, I, O](fsm: Apparatus[F, I, O], inputs: List[I], mat: DeciderMaterializer[F]): F[List[O]] =
+    alg.compile(mat)(fsm).flatMap { network =>
+      inputs.traverse(network.run)
     }
 
   /** Alias for [[runMultipleA]]. */
-  def runMultiple[F[_]: Monad, M[_]: Foldable, I, O: Monoid](
+  def runMultiple[F[_]: {Monad, Ref.Make}, M[_]: Foldable, I, O: Monoid](
     fsm: Apparatus[F, I, O], entries: M[I], mat: DeciderMaterializer[F]
   ): F[O] =
     runMultipleA(fsm, entries, mat)

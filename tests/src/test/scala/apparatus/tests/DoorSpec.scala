@@ -2,7 +2,7 @@ package apparatus.tests
 
 import apparatus.core.*
 import apparatus.core.machines.*
-import cats.Id
+import cats.effect.SyncIO
 import cats.implicits.*
 import cats.kernel.Monoid
 import zio.blocks.schema.Schema
@@ -59,23 +59,24 @@ val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
     .decide[DoorCommand, List[DoorEvent]](_.decide(_))
     .evolveList(_.evolve(_))
 
-val doorProject: OpenMealy[Id, List[DoorEvent], DoorStats] =
-  OpenMealy.apply[Id, DoorStats, List[DoorEvent], DoorStats](
+val doorProject: OpenMealy[SyncIO, List[DoorEvent], DoorStats] =
+  OpenMealy.apply[SyncIO, DoorStats, List[DoorEvent], DoorStats](
     DoorStats(0, 0),
-    (s, i) =>
+    (s, i) => SyncIO.pure {
       val res = i.foldLeft(s)((s, ev) => ev match
         case DoorEvent.Opened => s.incrOpened
         case DoorEvent.Closed => s.incrClosed
         case _                => s
       )
       (res, res)
+    }
   )
 
-def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
+def freshNetwork: Apparatus[SyncIO, DoorCommand, DoorStats] =
   Apparatus.deciderMachine("door", door) >>> Apparatus.openMealy(doorProject)
 
-def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): O =
-  Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.id)
+def runAll[O: Monoid](fsm: Apparatus[SyncIO, DoorCommand, O], cmds: DoorCommand*): O =
+  Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.syncIO).unsafeRunSync()
 
 // --- Tests ---
 

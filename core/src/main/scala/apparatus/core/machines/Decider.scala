@@ -1,7 +1,8 @@
 package apparatus.core.machines
 
-import apparatus.core.Apparatus
 import cats.Id
+import cats.effect.SyncIO
+import cats.effect.kernel.Ref
 import zio.blocks.schema.Schema
 
 /** Pure, effect-free state machine following the Decider pattern.
@@ -96,8 +97,17 @@ trait DeciderMaterializer[F[_]] {
 }
 
 object DeciderMaterializer {
-  val id: DeciderMaterializer[Id] = new DeciderMaterializer[Id] {
-    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): Id[MealyMachine[Id, I, List[O]]] =
-      MealyMachine.Open(apparatus.toOpenMealy)
+  val syncIO: DeciderMaterializer[SyncIO] = new DeciderMaterializer[SyncIO] {
+    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): SyncIO[MealyMachine[SyncIO, I, List[O]]] =
+      Ref[SyncIO].of(apparatus.state).map { ref =>
+        MealyMachine.Closed(new ClosedMealy[SyncIO, I, List[O]]:
+          def action(input: I): SyncIO[List[O]] =
+            ref.get.flatMap { s =>
+              val o  = apparatus.decide(input, s)
+              val ns = apparatus.evolve(o, s)
+              ref.set(ns).as(o)
+            }
+        )
+      }
   }
 }

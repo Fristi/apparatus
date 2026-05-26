@@ -8,7 +8,7 @@ import cats.Monad
 object Mermaid:
 
   def print[Eff[_] : Monad, I, O](apparatus: Apparatus[Eff, I, O]): String =
-    val (_, normalized) = normalize(apparatus)
+    val (_, _, normalized) = normalize(apparatus)
     val ctx = Context()
     render(normalized, ctx)
     "graph TD\n" + ctx.declarations.mkString("\n") + "\n" + ctx.edges.mkString("\n")
