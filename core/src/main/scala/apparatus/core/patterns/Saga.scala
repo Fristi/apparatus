@@ -1,8 +1,11 @@
-package apparatus.core
+package apparatus.core.patterns
 
+import apparatus.core.*
+import apparatus.core.machines.{Decider, DeciderBuilder, evolveList}
 import cats.*
 import cats.data.NonEmptySet
 import cats.implicits.*
+import zio.blocks.schema.Schema
 
 import scala.collection.immutable.SortedSet
 
@@ -104,8 +107,8 @@ type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (Stp, SagaPhase, SagaStepResult)]
   *
   * Then compose the service machine into the saga's event bus:
   * {{{
-  * def carServiceFSM[F[_]: Applicative]: Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
-  *   carStep.rmap(carStep.lmapOrEmpty(carDecider().toApparatus[F]("car")), BookingCommand.advancePrism)
+  * def carServiceFSM[F[_]: Applicative]: Apparatus[SagaEvent[BookingStep], List[BookingCommand]] =
+  *   carStep.rmap[F](carStep.lmapOrEmpty(carDecider().toApparatus[F]("car")), BookingCommand.advancePrism)
   * }}}
   *
   * @tparam Cmd the command type of the external service (e.g. `CarCommand`)
@@ -230,7 +233,7 @@ object SagaState {
 }
 
 /** Outcome reported by an external service for a single saga step or compensation step. */
-enum SagaStepResult { case Completed, Failed }
+enum SagaStepResult derives Schema { case Completed, Failed }
 
 /** Events emitted by [[SagaBehavior.decide]] and consumed by [[SagaBehavior.evolve]].
   *
@@ -239,24 +242,44 @@ enum SagaStepResult { case Completed, Failed }
   *
   * @tparam Step the step type
   */
-enum SagaEvent[Step]:
+sealed trait SagaEvent[Step]
+
+object SagaEvent:
+
   /** The saga was started. `steps` is the full ordered set of forward steps to execute. */
-  case Booted(steps: NonEmptySet[Step])
+  final case class Booted[Step](
+                                 steps: NonEmptySet[Step]
+                               ) extends SagaEvent[Step]
 
   /** A forward step has been dispatched to the external service. */
-  case StepStarted(name: Step)
+  final case class StepStarted[Step](
+                                      name: Step
+                                    ) extends SagaEvent[Step]
 
   /** An external service reported the result of a forward step. */
-  case StepProgressed(name: Step, result: SagaStepResult)
+  final case class StepProgressed[Step](
+                                         name: Step,
+                                         result: SagaStepResult
+                                       ) extends SagaEvent[Step]
 
   /** A forward step failed; compensation will proceed through `steps` in order. */
-  case CompensationTriggered(steps: NonEmptySet[Step])
+  final case class CompensationTriggered[Step](
+                                                steps: NonEmptySet[Step]
+                                              ) extends SagaEvent[Step]
 
   /** A compensation step has been dispatched to the external service. */
-  case CompensationStarted(name: Step)
+  final case class CompensationStarted[Step](
+                                              name: Step
+                                            ) extends SagaEvent[Step]
 
   /** An external service reported the result of a compensation step. */
-  case CompensationProgressed(name: Step, result: SagaStepResult)
+  final case class CompensationProgressed[Step](
+                                                 name: Step,
+                                                 result: SagaStepResult
+                                               ) extends SagaEvent[Step]
+
+  given [Step: {Schema, Order}]: Schema[SagaEvent[Step]] =
+    Schema.derived
 
 /** Defines the domain-specific shape of a saga.
   *
@@ -382,7 +405,7 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
           case SagaEvent.StepStarted(_) => SagaState.Running(steps.head, steps.tail, SortedSet.empty)
           case _ => state
         }
-      case SagaState.Running(_, todo, compensation) =>
+      case SagaState.Running(current, todo, compensation) =>
         evt match {
           case SagaEvent.StepProgressed(name, SagaStepResult.Completed) =>
             if todo.isEmpty then SagaState.Succeeded()

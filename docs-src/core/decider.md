@@ -9,11 +9,11 @@ event-sourced systems. It separates two concerns:
 | `evolve` | `(O, S) => S` | Folds the output back into a new state |
 
 Because both functions are **pure**, they are trivially testable in isolation and composable with
-any effect stack via `toBaseMachine`.
+any effect stack via `toOpenMealy`.
 
 ```scala mdoc
 import apparatus.core.*
-import cats.Id
+import apparatus.core.machines.*
 import cats.implicits.*
 ```
 
@@ -75,80 +75,4 @@ val evts3 = light.decide(LightCmd.TurnOff, LightState.On)
 // evolve
 val s1 = light.evolve(List(LightEvt.TurnedOn), LightState.Off)
 val s2 = light.evolve(Nil, LightState.Off)
-```
-
-## Replaying an event stream
-
-`evolveFrom` rebuilds the aggregate state from a persisted event log:
-
-```scala mdoc
-val history = List(LightEvt.TurnedOn, LightEvt.TurnedOff, LightEvt.TurnedOn)
-val replayed = light.evolveFrom(history)
-// replayed.state == LightState.On
-```
-
-## Lifting into an effect stack
-
-`toBaseMachine[F]` converts the decider into a `BaseMachineT` running in any `Applicative` `F`:
-
-```scala mdoc
-val lightFsm: Apparatus[Id, LightCmd, List[LightEvt]] =
-  Apparatus.Fresh(light.toBaseMachine[Id])
-
-val (fsmEvts1, next) = Apparatus.run(lightFsm, LightCmd.TurnOn)
-val (fsmEvts2, _)    = Apparatus.run(next,     LightCmd.TurnOff)
-```
-
-## Composing with a projection
-
-Because `toBaseMachine` returns a `BaseMachineT`, you can pipe it into a projection machine with
-`>>>`. The decider emits events; the projection folds them into a read model.
-
-```scala mdoc
-case class LightStats(on: Int, off: Int)
-
-val projection: BaseMachineT[Id, List[LightEvt], LightStats] =
-  BaseMachineT[Id, LightStats, List[LightEvt], LightStats](
-    LightStats(0, 0),
-    (stats, evts) =>
-      val next = evts.foldLeft(stats) {
-        case (s, LightEvt.TurnedOn)  => s.copy(on  = s.on  + 1)
-        case (s, LightEvt.TurnedOff) => s.copy(off = s.off + 1)
-      }
-      (next, next)
-  )
-
-val network: Apparatus[Id, LightCmd, LightStats] =
-  Apparatus.Fresh(light.toBaseMachine[Id]) >>> Apparatus.Fresh(projection)
-
-given cats.kernel.Monoid[LightStats] =
-  cats.kernel.Monoid.instance(LightStats(0, 0), (a, b) => LightStats(a.on max b.on, a.off max b.off))
-
-val (stats, _) = Apparatus.runMultiple(network, List(
-  LightCmd.TurnOn, LightCmd.TurnOff, LightCmd.TurnOn
-))
-```
-
-## Fallible commands
-
-Use `withError` / `partiallyDecide` / `evolveErrorList` when some commands are invalid and you
-want to surface that as `Either[E, List[O]]`:
-
-```scala mdoc:silent
-enum Error { case InvalidCommand }
-
-val safeDoor =
-  DeciderBuilder
-    .seed(LightState.Off)
-    .withError(Error.InvalidCommand)
-    .partiallyDecide[LightCmd, List[LightEvt]] {
-      case (LightCmd.TurnOn,  LightState.Off) => Right(List(LightEvt.TurnedOn))
-      case (LightCmd.TurnOff, LightState.On)  => Right(List(LightEvt.TurnedOff))
-    }
-    .evolveErrorList { (state, evt) =>
-      (state, evt) match
-        case (LightState.Off, LightEvt.TurnedOn)  => LightState.On
-        case (LightState.On,  LightEvt.TurnedOff) => LightState.Off
-        case _                                     => state
-    }
 ```

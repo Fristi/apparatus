@@ -1,7 +1,9 @@
-package apparatus.core
+package apparatus.core.machines
 
-import cats.{Applicative, MonadError}
-import cats.implicits.*
+import cats.Id
+import cats.effect.SyncIO
+import cats.effect.kernel.Ref
+import zio.blocks.schema.Schema
 
 /** Pure, effect-free state machine following the Decider pattern.
  *
@@ -22,33 +24,15 @@ import cats.implicits.*
  * @param evolve pure function `(output, state) => newState`
  */
 final case class Decider[S, I, O](state: S, decide: (I, S) => O, evolve: (O, S) => S) { self =>
-
-  def toApparatus[F[_] : Applicative](id: String): Apparatus[F, I, O] = {
-    val baseMachine =
-      new BaseMachineT[F, I, O]:
-        override type State = S
-
-        override def initialState: S = self.state
-
-        override def action(state: State, input: I): F[(O, State)] =
-          val o = self.decide(input, state)
-          val ns = self.evolve(o, state)
-          (o, ns).pure
-          
-    Apparatus.Stable(id, baseMachine)
-  }
-  
-  /** Lift into [[BaseMachineT]] under effect `F`, running `decide` then `evolve` per step. */
-  def toBaseMachine[F[_] : Applicative]: BaseMachineT[F, I, O] =
-    new BaseMachineT[F, I, O]:
+  def toOpenMealy: OpenMealy[Id, I, O] {type State = S} =
+    new OpenMealy[Id, I, O]:
       override type State = S
-
       override def initialState: S = self.state
-
-      override def action(state: State, input: I): F[(O, State)] =
+      override def action(state: State, input: I): Id[(O, State)] =
         val o = self.decide(input, state)
         val ns = self.evolve(o, state)
-        (o, ns).pure
+        (o, ns)
+  
 }
 
 final class SeedDeciderBuilder[S] private[core] (val initialState: S) {
@@ -102,18 +86,28 @@ extension [S, I, O](decider: Decider[S, I, List[O]]) {
     )
 }
 
-extension [S, E, I, O](decider: Decider[S, I, Either[E, List[O]]]) {
-  def absorbEitherToBaseMachine[F[_], EE](using M: MonadError[F, EE], ev: E =:= EE): BaseMachineT[F, I, List[O]] =
-    absorbEitherToBaseMachine_(ev)
 
-  def absorbEitherToBaseMachine_[F[_], EE](liftError: E => EE)(using M: MonadError[F, EE]): BaseMachineT[F, I, List[O]] =
-    new BaseMachineT[F, I, List[O]] {
-      override type State = S
-      override def initialState: S = decider.state
-      override def action(state: State, input: I): F[(List[O], State)] =
-        for {
-          o <- M.fromEither(decider.decide(input, state).left.map(liftError))
-          ns = decider.evolve(Right(o), state)
-        } yield (o, ns)
-    }
+
+enum MealyMachine[F[_], I, O]:
+  case Open(open: OpenMealy[F, I, O])
+  case Closed(closed: ClosedMealy[F, I, O])
+  
+trait DeciderMaterializer[F[_]] {
+  def materialize[S, I, O : Schema](apparatus: Decider[S, I, List[O]], networkId: String): F[MealyMachine[F, I, List[O]]]
+}
+
+object DeciderMaterializer {
+  val syncIO: DeciderMaterializer[SyncIO] = new DeciderMaterializer[SyncIO] {
+    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): SyncIO[MealyMachine[SyncIO, I, List[O]]] =
+      Ref[SyncIO].of(apparatus.state).map { ref =>
+        MealyMachine.Closed(new ClosedMealy[SyncIO, I, List[O]]:
+          def action(input: I): SyncIO[List[O]] =
+            ref.get.flatMap { s =>
+              val o  = apparatus.decide(input, s)
+              val ns = apparatus.evolve(o, s)
+              ref.set(ns).as(o)
+            }
+        )
+      }
+  }
 }

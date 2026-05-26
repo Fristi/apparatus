@@ -1,11 +1,13 @@
 package apparatus.examples
 
-import apparatus.core.*
+import apparatus.core.Apparatus
+import apparatus.core.machines.*
 import cats.Applicative
 import cats.implicits.*
 import doobie.*
 import doobie.implicits.*
 import doobie.postgres.implicits.*
+import zio.blocks.schema.Schema
 
 import java.time.Instant
 import java.util.UUID
@@ -32,20 +34,21 @@ enum BankAccountState:
       case BankAccountState.Closed => this
     }
 
-  def decide(cmd: BankAccountCommand): List[BankAccountEvent] = this match {
-    case BankAccountState.Uninitialized => cmd match {
-      case BankAccountCommand.Open(at) => List(BankAccountEvent.Opened(at))
-      case _ => List(BankAccountEvent.Rejected("invalid command for current state"))
+  def decide(cmd: BankAccountCommand): List[BankAccountEvent] = 
+    this match {
+      case BankAccountState.Uninitialized => cmd match {
+        case BankAccountCommand.Open(at) => List(BankAccountEvent.Opened(at))
+        case _ => List(BankAccountEvent.Rejected("invalid command for current state"))
+      }
+      case BankAccountState.Active(balance) => cmd match {
+        case BankAccountCommand.Deposit(amount, at) => List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else BankAccountEvent.Deposited(amount, at))
+        case BankAccountCommand.Withdraw(amount, at) =>
+          List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else if (amount > balance) BankAccountEvent.Rejected("insufficient funds") else BankAccountEvent.Withdrawn(amount, at))
+        case BankAccountCommand.Close(at) => List(BankAccountEvent.ClosedAccount(at))
+        case _ => Nil
+      }
+      case BankAccountState.Closed => List(BankAccountEvent.Rejected("invalid command for current state"))
     }
-    case BankAccountState.Active(balance) => cmd match {
-      case BankAccountCommand.Deposit(amount, at) => List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else BankAccountEvent.Deposited(amount, at))
-      case BankAccountCommand.Withdraw(amount, at) =>
-        List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else if (amount > balance) BankAccountEvent.Rejected("insufficient funds") else BankAccountEvent.Withdrawn(amount, at))
-      case BankAccountCommand.Close(at) => List(BankAccountEvent.ClosedAccount(at))
-      case _ => Nil
-    }
-    case BankAccountState.Closed => List(BankAccountEvent.Rejected("invalid command for current state"))
-  }
 
 enum BankAccountCommand:
   case Open(at: Instant)
@@ -53,31 +56,13 @@ enum BankAccountCommand:
   case Withdraw(amount: BigDecimal, at: Instant)
   case Close(at: Instant)
 
-enum BankAccountEvent:
+enum BankAccountEvent derives Schema:
   case Opened(at: Instant)
   case Deposited(amount: BigDecimal, at: Instant)
   case Withdrawn(amount: BigDecimal, at: Instant)
   case ClosedAccount(at: Instant)
   case Rejected(reason: String)
 
-object BankAccountEvent:
-  private def encode(ev: BankAccountEvent): String = ev match
-    case BankAccountEvent.Opened(at)            => s"Opened|$at"
-    case BankAccountEvent.Deposited(amount, at) => s"Deposited|$amount|$at"
-    case BankAccountEvent.Withdrawn(amount, at) => s"Withdrawn|$amount|$at"
-    case BankAccountEvent.ClosedAccount(at)     => s"ClosedAccount|$at"
-    case BankAccountEvent.Rejected(reason)      => s"Rejected|$reason"
-
-  private def decode(s: String): BankAccountEvent =
-    s.split("\\|").toList match
-      case "Opened" :: at :: Nil              => BankAccountEvent.Opened(Instant.parse(at))
-      case "Deposited" :: amount :: at :: Nil => BankAccountEvent.Deposited(BigDecimal(amount), Instant.parse(at))
-      case "Withdrawn" :: amount :: at :: Nil => BankAccountEvent.Withdrawn(BigDecimal(amount), Instant.parse(at))
-      case "ClosedAccount" :: at :: Nil       => BankAccountEvent.ClosedAccount(Instant.parse(at))
-      case "Rejected" :: rest                 => BankAccountEvent.Rejected(rest.mkString("|"))
-      case _                                  => throw new Exception(s"Cannot decode event: $s")
-
-  given Meta[BankAccountEvent] = Meta[String].imap(decode)(encode)
 
 val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountEvent]] =
   DeciderBuilder
@@ -86,7 +71,7 @@ val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountE
     .evolveList(_.evolve(_))
 
 def transactionsProjection(id: UUID, repo: BankAccountTransactionRepository[ConnectionIO]): Apparatus[ConnectionIO, List[BankAccountEvent], Int] =
-  Apparatus.Fresh(BaseMachineT.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs =>
+  Apparatus.closedMealy(ClosedMealy.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs =>
     evs.traverse {
       case BankAccountEvent.Deposited(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Deposit, amount, at))
       case BankAccountEvent.Withdrawn(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Withdrawal, amount, at))
