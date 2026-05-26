@@ -6,6 +6,7 @@ functions are erased at runtime — but labels make a diagram easier to digest h
 
 ```scala mdoc:silent
 import apparatus.core.*
+import apparatus.core.fix.alg.Mermaid
 import apparatus.examples.*
 import cats.Id
 import cats.implicits.*
@@ -42,7 +43,7 @@ Label semantics depend on what the node is:
 
 | Mermaid shape | Apparatus node |
 |---|---|
-| `["name"]` rectangle | `Apparatus.Fresh` / `Apparatus.Stable` — a single machine node |
+| `["name"]` rectangle | `Apparatus.deciderMachine` / `Apparatus.closedMealy` — a single machine node |
 | `{"name"}` diamond | `Apparatus.Alternative` (routing) or `Apparatus.LmapOrEmpty` (filter) |
 | `(["name"])` stadium | Structural `split`, `join`, `fan-out`, `combine` connectors |
 
@@ -97,7 +98,7 @@ and `N[A] ↺` respectively. Mermaid renders these as curved arrows that close t
 
 ## Labeling intermediate nodes
 
-The most useful pattern is to label every `Fresh` or `Stable` node that wraps a domain decider
+The most useful pattern is to label every `deciderMachine` node that wraps a domain decider
 and every `lmapOrEmpty` filter:
 
 ```scala

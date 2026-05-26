@@ -10,7 +10,9 @@ primitive tuples and right-nested `Either`s, then lift them to your domain ADTs 
 
 ```scala mdoc
 import apparatus.core.*
-import cats.Id
+import apparatus.core.machines.*
+import cats.effect.SyncIO
+import cats.implicits.*
 ```
 
 ---
@@ -82,15 +84,17 @@ instances to be in scope: one for the input type and one for the output type.
 case class In(x: Int, flag: Boolean)
 case class Out(label: String, value: Double)
 
-val tupleFsm: Apparatus[Id, (Int, Boolean), (String, Double)] =
-  Apparatus.Fresh(BaseMachineT.stateless[Id, (Int, Boolean), (String, Double)] {
-    case (n, b) => (if b then "yes" else "no", n.toDouble)
+val mat = DeciderMaterializer.syncIO
+
+val tupleFsm: Apparatus[SyncIO, (Int, Boolean), (String, Double)] =
+  Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, (Int, Boolean), (String, Double)] {
+    case (n, b) => SyncIO.pure(if b then "yes" else "no", n.toDouble)
   })
 
 // Lift to case-class I/O with imap
-val adtFsm: Apparatus[Id, In, Out] = tupleFsm.imap
+val adtFsm: Apparatus[SyncIO, In, Out] = tupleFsm.imap
 
-val (out, _) = Apparatus.run(adtFsm, In(42, true))
+val out: Out = Apparatus.run(adtFsm, In(42, true), mat).unsafeRunSync()
 ```
 
 ### Coproduct example
@@ -103,23 +107,23 @@ case class Doubled(n: Int)  extends Result
 case class Negated(n: Int)  extends Result
 case object Zero            extends Result
 
-val doubleFsm: Apparatus[Id, Add, Doubled] =
-  Apparatus.Fresh(BaseMachineT.stateless[Id, Add, Doubled](c => Doubled(c.n * 2)))
+val doubleFsm: Apparatus[SyncIO, Add, Doubled] =
+  Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Add, Doubled](c => SyncIO.pure(Doubled(c.n * 2))))
 
-val negateFsm: Apparatus[Id, Mul, Negated] =
-  Apparatus.Fresh(BaseMachineT.stateless[Id, Mul, Negated](c => Negated(-c.n)))
+val negateFsm: Apparatus[SyncIO, Mul, Negated] =
+  Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Mul, Negated](c => SyncIO.pure(Negated(-c.n))))
 
-val resetFsm2: Apparatus[Id, Reset.type, Zero.type] =
-  Apparatus.Fresh(BaseMachineT.stateless[Id, Reset.type, Zero.type](_ => Zero))
+val resetFsm2: Apparatus[SyncIO, Reset.type, Zero.type] =
+  Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Reset.type, Zero.type](_ => SyncIO.pure(Zero)))
 
 // Right-group to match sumIso nesting
 val eitherFsm = doubleFsm ||| (negateFsm ||| resetFsm2)
 
-val adtFsm2: Apparatus[Id, Op, Result] = eitherFsm.imap
+val adtFsm2: Apparatus[SyncIO, Op, Result] = eitherFsm.imap
 
-val (r1, f1) = Apparatus.run(adtFsm2, Add(5))
-val (r2, f2) = Apparatus.run(f1,      Mul(3))
-val (r3, _)  = Apparatus.run(f2,      Reset)
+val r1: Result = Apparatus.run(adtFsm2, Add(5),  mat).unsafeRunSync()
+val r2: Result = Apparatus.run(adtFsm2, Mul(3),  mat).unsafeRunSync()
+val r3: Result = Apparatus.run(adtFsm2, Reset,   mat).unsafeRunSync()
 ```
 
 ---
