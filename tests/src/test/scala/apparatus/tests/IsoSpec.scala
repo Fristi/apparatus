@@ -1,7 +1,10 @@
 package apparatus.tests
 
 import apparatus.core.*
+import apparatus.core.machines.*
 import cats.Id
+import cats.effect.*
+import cats.effect.implicits.*
 import cats.implicits.*
 
 // --- domain: 3-subtype coproduct ---
@@ -23,12 +26,12 @@ case class Out(a: Boolean, b: Double)
 
 // --- fixtures ---
 
-val incFsm:   Apparatus[Id, Inc,   Incremented] = Apparatus.Fresh(BaseMachineT.stateless[Id, Inc,   Incremented](c => Incremented(c.n)))
-val decFsm:   Apparatus[Id, Dec,   Decremented] = Apparatus.Fresh(BaseMachineT.stateless[Id, Dec,   Decremented](c => Decremented(c.n)))
-val resetFsm: Apparatus[Id, Reset, WasReset]    = Apparatus.Fresh(BaseMachineT.stateless[Id, Reset, WasReset](_ => WasReset()))
+val incFsm:   Apparatus[SyncIO, Inc,   Incremented] = Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Inc,   Incremented](c => Incremented(c.n).pure))
+val decFsm:   Apparatus[SyncIO, Dec,   Decremented] = Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Dec,   Decremented](c => Decremented(c.n).pure))
+val resetFsm: Apparatus[SyncIO, Reset, WasReset]    = Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Reset, WasReset](_ => WasReset().pure))
 
-val boolFsm: Apparatus[Id, Int,    Boolean] = Apparatus.Fresh(BaseMachineT.stateless[Id, Int,    Boolean](n => n > 0))
-val strFsm:  Apparatus[Id, String, Double]  = Apparatus.Fresh(BaseMachineT.stateless[Id, String, Double](_.toDouble))
+val boolFsm: Apparatus[SyncIO, Int,    Boolean] = Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, Int,    Boolean](n => (n > 0).pure))
+val strFsm:  Apparatus[SyncIO, String, Double]  = Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, String, Double](_.toDouble.pure))
 
 // --- tests ---
 
@@ -67,34 +70,27 @@ class IsoSpec extends munit.FunSuite:
   // ---- Apparatus.imap: coproduct ----
 
   test("imap lifts right-nested Either Apparatus to sealed-trait Cmd/Evt"):
-    val adtFsm: Apparatus[Id, Cmd, Evt] = (incFsm ||| (decFsm ||| resetFsm)).imap
-
-    val (e1, f1) = Apparatus.run(adtFsm, Inc(10))
-    assertEquals(e1, Incremented(10))
-    val (e2, f2) = Apparatus.run(f1, Dec(3))
-    assertEquals(e2, Decremented(3))
-    val (e3, _)  = Apparatus.run(f2, Reset())
-    assertEquals(e3, WasReset())
+    val adtFsm: Apparatus[SyncIO, Cmd, Evt] = (incFsm ||| (decFsm ||| resetFsm)).imap
+    val mat = DeciderMaterializer.syncIO
+    assertEquals(Apparatus.runA(adtFsm, Inc(10), mat).unsafeRunSync(), Incremented(10))
+    assertEquals(Apparatus.runA(adtFsm, Dec(3),  mat).unsafeRunSync(), Decremented(3))
+    assertEquals(Apparatus.runA(adtFsm, Reset(), mat).unsafeRunSync(), WasReset())
 
   // ---- Apparatus.imap: product ----
 
   test("imap lifts tuple Apparatus to case-class In/Out"):
-    val adtFsm: Apparatus[Id, In, Out] = (boolFsm *** strFsm).imap
-
-    val (out, _) = Apparatus.run(adtFsm, In(5, "3.14"))
-    assertEquals(out, Out(true, 3.14))
+    val adtFsm: Apparatus[SyncIO, In, Out] = (boolFsm *** strFsm).imap
+    assertEquals(Apparatus.runA(adtFsm, In(5, "3.14"), DeciderMaterializer.syncIO).unsafeRunSync(), Out(true, 3.14))
 
   // ---- imap preserves internal state ----
 
   test("imap preserves state across steps"):
-    val accumFsm: Apparatus[Id, Inc, Incremented] =
-      Apparatus.Fresh(BaseMachineT[Id, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n)))
+    val accumFsm: Apparatus[SyncIO, Inc, Incremented] =
+      Apparatus.openMealy(OpenMealy[SyncIO, Int, Inc, Incremented](0, (s, c) => (Incremented(s + c.n), s + c.n).pure))
 
-    val adtFsm: Apparatus[Id, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
+    val adtFsm: Apparatus[SyncIO, Cmd, Evt] = (accumFsm ||| (decFsm ||| resetFsm)).imap
 
-    val (e1, f1) = Apparatus.run(adtFsm, Inc(3))
-    assertEquals(e1, Incremented(3))
-    val (e2, f2) = Apparatus.run(f1, Inc(4))
-    assertEquals(e2, Incremented(7))
-    val (e3, _)  = Apparatus.run(f2, Reset())
-    assertEquals(e3, WasReset())
+    val results = Apparatus.runSteps(adtFsm, List(Inc(3), Inc(4), Reset()), DeciderMaterializer.syncIO).unsafeRunSync()
+    assertEquals(results(0), Incremented(3))
+    assertEquals(results(1), Incremented(7))
+    assertEquals(results(2), WasReset())

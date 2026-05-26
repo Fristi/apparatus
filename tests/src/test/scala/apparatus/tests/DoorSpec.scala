@@ -1,9 +1,11 @@
 package apparatus.tests
 
 import apparatus.core.*
-import cats.Id
+import apparatus.core.machines.*
+import cats.effect.SyncIO
 import cats.implicits.*
 import cats.kernel.Monoid
+import zio.blocks.schema.Schema
 
 // --- Domain model ---
 
@@ -34,7 +36,7 @@ enum DoorCommand:
   case Knock
   case Close
 
-enum DoorEvent:
+enum DoorEvent derives Schema:
   case Knocked
   case Opened
   case Closed
@@ -54,26 +56,27 @@ object DoorStats:
 val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
   DeciderBuilder
     .seed[DoorState](DoorState.Closed(0))
-    .decide[DoorCommand, List[DoorEvent]](_ decide _)
-    .evolveList(_ evolve _)
+    .decide[DoorCommand, List[DoorEvent]](_.decide(_))
+    .evolveList(_.evolve(_))
 
-val doorProject: BaseMachineT[Id, List[DoorEvent], DoorStats] =
-  BaseMachineT.apply[Id, DoorStats, List[DoorEvent], DoorStats](
+val doorProject: OpenMealy[SyncIO, List[DoorEvent], DoorStats] =
+  OpenMealy.apply[SyncIO, DoorStats, List[DoorEvent], DoorStats](
     DoorStats(0, 0),
-    (s, i) =>
+    (s, i) => SyncIO.pure {
       val res = i.foldLeft(s)((s, ev) => ev match
         case DoorEvent.Opened => s.incrOpened
         case DoorEvent.Closed => s.incrClosed
         case _                => s
       )
       (res, res)
+    }
   )
 
-def freshNetwork: Apparatus[Id, DoorCommand, DoorStats] =
-  door.toApparatus[Id]("door") >>> Apparatus.Fresh(doorProject)
+def freshNetwork: Apparatus[SyncIO, DoorCommand, DoorStats] =
+  Apparatus.deciderMachine("door", door) >>> Apparatus.openMealy(doorProject)
 
-def runAll[O : Monoid](fsm: Apparatus[Id, DoorCommand, O], cmds: DoorCommand*): (O, Apparatus[Id, DoorCommand, O]) =
-  Apparatus.runMultiple(fsm, cmds)
+def runAll[O: Monoid](fsm: Apparatus[SyncIO, DoorCommand, O], cmds: DoorCommand*): O =
+  Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.syncIO).unsafeRunSync()
 
 // --- Tests ---
 
@@ -100,12 +103,12 @@ class DoorSpec extends munit.FunSuite:
     assertEquals(evts, Nil)
 
   test("three knocks open the door via Apparatus network"):
-    val (stats, _) = runAll(freshNetwork, DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock)
+    val stats = runAll(freshNetwork, DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock)
     assertEquals(stats.opened, 1)
     assertEquals(stats.closed, 0)
 
   test("open then close via Apparatus network"):
-    val (stats, _) = runAll(
+    val stats = runAll(
       freshNetwork,
       DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock,
       DoorCommand.Close
@@ -114,7 +117,7 @@ class DoorSpec extends munit.FunSuite:
     assertEquals(stats.closed, 1)
 
   test("stats accumulate across multiple open/close cycles"):
-    val (stats, _) = runAll(
+    val stats = runAll(
       freshNetwork,
       DoorCommand.Knock, DoorCommand.Knock, DoorCommand.Knock, // open
       DoorCommand.Close,                                        // close

@@ -23,6 +23,7 @@ lazy val core = (project in file("core"))
     name := "apparatus-core",
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-core"         % "2.13.0",
+      "org.typelevel" %% "cats-effect"       % "3.5.4",
       "dev.zio"       %% "zio-blocks-schema" % "0.0.33"
     )
   )
