@@ -1,27 +1,30 @@
 package apparatus.core.fix.alg
 
 import apparatus.core.Apparatus
-import apparatus.core.fix.{ApparatusF, HAlgebra2, HFix2, cata2}
+import apparatus.core.fix.{ApparatusF, HAlgebra2, cata2}
 import apparatus.core.machines.{ClosedMealy, DeciderMaterializer, MealyMachine, OpenMealy}
 import cats.data.StateT
 import cats.implicits.*
 import cats.{Foldable, Monad, Monoid}
 
 /** State threaded through a compiled network.
- *  - `deciders` — materialized machines looked up by Ref nodes
+ *  - `deciders` — materialized deciders looked up by Ref nodes
  *  - `states`   — current state for Open decider machines (Ref nodes only)
  */
-final case class DeciderStates[F[_]](deciders: Map[String, MealyMachine[F, ?, ?]], states: Map[String, Any]) {
-  def withState(id: String, state: Any): DeciderStates[F] =
+final case class DeciderStateMap[F[_]](deciders: Map[String, MealyMachine[F, ?, ?]], states: Map[String, Any]) {
+  def withState(id: String, state: Any): DeciderStateMap[F] =
     copy(states = states + (id -> state))
 }
 
 /** A fully stepped machine: carries the current Apparatus tree (with up-to-date
  *  OpenMachine states baked into initialState) plus a run function that produces
- *  output and the next SteppedMachine in one step. */
-final case class CompiledNetwork[F[_], I, O](run: I => StateT[F, DeciderStates[F], (O, CompiledNetwork[F, I, O])])
+ *  output and the next CompiledNetwork in one step. */
+final case class CompiledNetwork[F[_], I, O](run: I => StateT[F, DeciderStateMap[F], (O, CompiledNetwork[F, I, O])])
 
-private def evalAlg[F[_]: Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F, I, O], [I, O] =>> CompiledNetwork[F, I, O]] =
+private type ApparatusK[F[_]] = [G[_, _], I, O] =>> ApparatusF[G, F, I, O]
+private type NetworkK[F[_]] = [I, O] =>> CompiledNetwork[F, I, O]
+
+private def evalAlg[F[_]: Monad]: HAlgebra2[ApparatusK[F], NetworkK[F]] =
   [I, O] => (node: ApparatusF[[x, y] =>> CompiledNetwork[F, x, y], F, I, O]) => node match {
     case ApparatusF.DeciderMachine(_, _, _) => sys.error("DeciderMachine reached evalAlg — normalize must be called first")
     case ApparatusF.OpenMachine(machine) => openMachineStep(machine)
@@ -37,10 +40,10 @@ private def evalAlg[F[_]: Monad]: HAlgebra2[[G[_, _], I, O] =>> ApparatusF[G, F,
     case ApparatusF.Labeled(inner, _) => labeledStep(inner)
   }
 
-def compile[F[_]: Monad, I, O](materializer: DeciderMaterializer[F])(apparatus: Apparatus[F, I, O]): F[(CompiledNetwork[F, I, O], DeciderStates[F])] = {
+def compile[F[_]: Monad, I, O](materializer: DeciderMaterializer[F])(apparatus: Apparatus[F, I, O]): F[(CompiledNetwork[F, I, O], DeciderStateMap[F])] = {
   val (normalizedRegistry, normalized) = normalize(apparatus)
   materializeRegistry(normalizedRegistry, materializer).map { deciders =>
-    val initialStates = DeciderStates(deciders, Map.empty)
+    val initialStates = DeciderStateMap(deciders, Map.empty)
     val stepped       = cata2(evalAlg[F])(normalized)
     (stepped, initialStates)
   }
@@ -68,13 +71,13 @@ private def refStep[F[_] : Monad, I, O](networkId: String) = {
   def go: CompiledNetwork[F, I, O] =
     CompiledNetwork(run = input =>
       for {
-        s <- StateT.get[F, DeciderStates[F]]
+        s <- StateT.get[F, DeciderStateMap[F]]
         output <- s.deciders(networkId) match {
           case MealyMachine.Open(m) =>
             val typed = m.asInstanceOf[OpenMealy[F, I, O]]
             val state = s.states.getOrElse(networkId, typed.initialState).asInstanceOf[typed.State]
             StateT.liftF(typed.action(state, input)).flatMap { case (o, ns) =>
-              StateT.modify[F, DeciderStates[F]](_.withState(networkId, ns)).as(o)
+              StateT.modify[F, DeciderStateMap[F]](_.withState(networkId, ns)).as(o)
             }
           case MealyMachine.Closed(m) =>
             StateT.liftF(m.asInstanceOf[ClosedMealy[F, I, O]].action(input))
@@ -100,40 +103,27 @@ private def openMachineStep[F[_] : Monad, I, O](machine: OpenMealy[F, I, O]) = {
   go(machine)
 }
 
-private def seqStep[F[_]: Monad, A, B, C](
-                                           l: CompiledNetwork[F, A, B],
-                                           r: CompiledNetwork[F, B, C]
-                                         ): CompiledNetwork[F, A, C] =
+private def seqStep[F[_]: Monad, A, B, C](l: CompiledNetwork[F, A, B], r: CompiledNetwork[F, B, C]): CompiledNetwork[F, A, C] =
   CompiledNetwork(run = input =>
     for {
       (b, nextL) <- l.run(input)
       (c, nextR) <- r.run(b)
     } yield (c, seqStep(nextL, nextR)))
 
-private def parStep[F[_]: Monad, A, B, C, D](
-                                              l: CompiledNetwork[F, A, B],
-                                              r: CompiledNetwork[F, C, D]
-                                            ): CompiledNetwork[F, (A, C), (B, D)] =
+private def parStep[F[_]: Monad, A, B, C, D](l: CompiledNetwork[F, A, B], r: CompiledNetwork[F, C, D]): CompiledNetwork[F, (A, C), (B, D)] =
   CompiledNetwork(run = input =>
     for {
       (b, nextL) <- l.run(input._1)
       (d, nextR) <- r.run(input._2)
     } yield ((b, d), parStep(nextL, nextR)))
 
-private def altStep[F[_]: Monad, A, B, C, D](
-                                              l: CompiledNetwork[F, A, B],
-                                              r: CompiledNetwork[F, C, D]
-                                            ): CompiledNetwork[F, Either[A, C], Either[B, D]] =
+private def altStep[F[_]: Monad, A, B, C, D](l: CompiledNetwork[F, A, B], r: CompiledNetwork[F, C, D]): CompiledNetwork[F, Either[A, C], Either[B, D]] =
   CompiledNetwork(run = {
     case Left(a) => l.run(a).map { case (b, nextL) => (Left(b), altStep(nextL, r)) }
     case Right(c) => r.run(c).map { case (d, nextR) => (Right(d), altStep(l, nextR)) }
   })
 
-private def lmapStep[F[_]: Monad, A, B, C](
-                                            m:  CompiledNetwork[F, A, B],
-                                            pf: PartialFunction[C, A],
-                                            mb: Monoid[B]
-                                          ): CompiledNetwork[F, C, B] =
+private def lmapStep[F[_]: Monad, A, B, C](m:  CompiledNetwork[F, A, B], pf: PartialFunction[C, A], mb: Monoid[B]): CompiledNetwork[F, C, B] =
   CompiledNetwork(run = input =>
     pf.lift(input) match
       case Some(a) => m.run(a).map { case (b, nextM) => (b, lmapStep(nextM, pf, mb)) }
@@ -160,12 +150,12 @@ private def feedbackLoop[F[_]: Monad, A, B, N[_]](
             acc: N[B],
             l: CompiledNetwork[F, A, N[B]],
             r: CompiledNetwork[F, B, N[A]]
-          ): StateT[F, DeciderStates[F], (N[B], CompiledNetwork[F, A, N[B]])] =
+          ): StateT[F, DeciderStateMap[F], (N[B], CompiledNetwork[F, A, N[B]])] =
     pending match
       case Nil => StateT.pure((acc, go(l, r)))
       case head :: tail =>
         l.run(head).flatMap { case (nb, nextL) =>
-          foldN.toList(nb).foldLeftM[[x] =>> StateT[F, DeciderStates[F], x], (N[A], CompiledNetwork[F, B, N[A]])](
+          foldN.toList(nb).foldLeftM[[x] =>> StateT[F, DeciderStateMap[F], x], (N[A], CompiledNetwork[F, B, N[A]])](
             (monoidNA.empty, r)
           ) { case ((naAcc, ri), b) =>
             ri.run(b).map { case (na, nextR) => (monoidNA.combine(naAcc, na), nextR) }
@@ -193,12 +183,12 @@ private def feedbackManyLoop[F[_]: Monad, A, B, N[_]](
             acc: N[B],
             l: CompiledNetwork[F, A, N[B]],
             r: CompiledNetwork[F, B, N[A]]
-          ): StateT[F, DeciderStates[F], (N[B], CompiledNetwork[F, N[A], N[B]])] =
+          ): StateT[F, DeciderStateMap[F], (N[B], CompiledNetwork[F, N[A], N[B]])] =
     pending match
       case Nil => StateT.pure((acc, go(l, r)))
       case head :: tail =>
         l.run(head).flatMap { case (nb, nextL) =>
-          foldN.toList(nb).foldLeftM[[x] =>> StateT[F, DeciderStates[F], x], (N[A], CompiledNetwork[F, B, N[A]])](
+          foldN.toList(nb).foldLeftM[[x] =>> StateT[F, DeciderStateMap[F], x], (N[A], CompiledNetwork[F, B, N[A]])](
             (monoidNA.empty, r)
           ) { case ((naAcc, ri), b) =>
             ri.run(b).map { case (na, nextR) => (monoidNA.combine(naAcc, na), nextR) }
