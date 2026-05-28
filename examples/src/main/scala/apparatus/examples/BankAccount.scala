@@ -12,6 +12,14 @@ import zio.blocks.schema.Schema
 import java.time.Instant
 import java.util.UUID
 
+sealed abstract class BankAccountError(msg: String) extends Exception(msg)
+object BankAccountError:
+  case object NotInitialized   extends BankAccountError("account not initialized")
+  case object AlreadyOpen      extends BankAccountError("account already open")
+  case object AlreadyClosed    extends BankAccountError("account is closed")
+  case class  InvalidAmount(reason: String) extends BankAccountError(reason)
+  case object InsufficientFunds extends BankAccountError("insufficient funds")
+
 enum BankAccountState:
   case Uninitialized
   case Active(balance: BigDecimal)
@@ -21,60 +29,67 @@ enum BankAccountState:
     this match {
       case BankAccountState.Uninitialized =>
         ev match {
-          case BankAccountEvent.Opened(_) => BankAccountState.Active(0)
+          case BankAccountEvent.Opened(_, _) => BankAccountState.Active(0)
           case _ => this
         }
       case BankAccountState.Active(balance) =>
         ev match {
-          case BankAccountEvent.Deposited(amount, at) => BankAccountState.Active(balance + amount)
-          case BankAccountEvent.Withdrawn(amount, at) => BankAccountState.Active(balance - amount)
-          case BankAccountEvent.ClosedAccount(_) => BankAccountState.Closed
+          case BankAccountEvent.Deposited(_, amount, at) => BankAccountState.Active(balance + amount)
+          case BankAccountEvent.Withdrawn(_, amount, at) => BankAccountState.Active(balance - amount)
+          case BankAccountEvent.ClosedAccount(_, _) => BankAccountState.Closed
           case _ => this
         }
       case BankAccountState.Closed => this
     }
 
-  def decide(cmd: BankAccountCommand): List[BankAccountEvent] = 
+  def decide(cmd: BankAccountCommand): Either[BankAccountError, List[BankAccountEvent]] =
     this match {
       case BankAccountState.Uninitialized => cmd match {
-        case BankAccountCommand.Open(at) => List(BankAccountEvent.Opened(at))
-        case _ => List(BankAccountEvent.Rejected("invalid command for current state"))
+        case BankAccountCommand.Open(id, at) => Right(List(BankAccountEvent.Opened(id, at)))
+        case _                               => Left(BankAccountError.NotInitialized)
       }
       case BankAccountState.Active(balance) => cmd match {
-        case BankAccountCommand.Deposit(amount, at) => List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else BankAccountEvent.Deposited(amount, at))
-        case BankAccountCommand.Withdraw(amount, at) =>
-          List(if (amount <= 0) BankAccountEvent.Rejected("amount must be positive") else if (amount > balance) BankAccountEvent.Rejected("insufficient funds") else BankAccountEvent.Withdrawn(amount, at))
-        case BankAccountCommand.Close(at) => List(BankAccountEvent.ClosedAccount(at))
-        case _ => Nil
+        case BankAccountCommand.Deposit(id, amount, at) =>
+          if amount <= 0 then Left(BankAccountError.InvalidAmount("amount must be positive"))
+          else Right(List(BankAccountEvent.Deposited(id, amount, at)))
+        case BankAccountCommand.Withdraw(id, amount, at) =>
+          if amount <= 0 then Left(BankAccountError.InvalidAmount("amount must be positive"))
+          else if amount > balance then Left(BankAccountError.InsufficientFunds)
+          else Right(List(BankAccountEvent.Withdrawn(id, amount, at)))
+        case BankAccountCommand.Close(id, at) => Right(List(BankAccountEvent.ClosedAccount(id, at)))
+        case _                                => Left(BankAccountError.AlreadyOpen)
       }
-      case BankAccountState.Closed => List(BankAccountEvent.Rejected("invalid command for current state"))
+      case BankAccountState.Closed => Left(BankAccountError.AlreadyClosed)
     }
 
-enum BankAccountCommand:
-  case Open(at: Instant)
-  case Deposit(amount: BigDecimal, at: Instant)
-  case Withdraw(amount: BigDecimal, at: Instant)
-  case Close(at: Instant)
+sealed trait BankAccountCommand {
+  val id: UUID
+}
+
+object BankAccountCommand:
+  case class Open(id: UUID, at: Instant) extends BankAccountCommand
+  case class Deposit(id: UUID, amount: BigDecimal, at: Instant) extends BankAccountCommand
+  case class Withdraw(id: UUID, amount: BigDecimal, at: Instant) extends BankAccountCommand
+  case class Close(id: UUID, at: Instant) extends BankAccountCommand
 
 enum BankAccountEvent derives Schema:
-  case Opened(at: Instant)
-  case Deposited(amount: BigDecimal, at: Instant)
-  case Withdrawn(amount: BigDecimal, at: Instant)
-  case ClosedAccount(at: Instant)
-  case Rejected(reason: String)
+  case Opened(id: UUID, at: Instant)
+  case Deposited(id: UUID, amount: BigDecimal, at: Instant)
+  case Withdrawn(id: UUID, amount: BigDecimal, at: Instant)
+  case ClosedAccount(id: UUID, at: Instant)
 
 
-val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountEvent]] =
+val bankAccount: Decider[BankAccountState, BankAccountCommand, Either[BankAccountError, List[BankAccountEvent]]] =
   DeciderBuilder
     .seed[BankAccountState](BankAccountState.Uninitialized)
-    .decide[BankAccountCommand, List[BankAccountEvent]](_.decide(_))
-    .evolveList(_.evolve(_))
+    .decide[BankAccountCommand, Either[BankAccountError, List[BankAccountEvent]]](_.decide(_))
+    .evolveErrorList(_.evolve(_))
 
-def transactionsProjection(id: UUID, repo: BankAccountTransactionRepository[ConnectionIO]): Apparatus[ConnectionIO, List[BankAccountEvent], Int] =
+def transactionsProjection(repo: BankAccountTransactionRepository[ConnectionIO]): Apparatus[ConnectionIO, List[BankAccountEvent], Int] =
   Apparatus.closedMealy(ClosedMealy.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs =>
     evs.traverse {
-      case BankAccountEvent.Deposited(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Deposit, amount, at))
-      case BankAccountEvent.Withdrawn(amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Withdrawal, amount, at))
+      case BankAccountEvent.Deposited(id, amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Deposit, amount, at))
+      case BankAccountEvent.Withdrawn(id, amount, at) => repo.insertTransaction(id, Transaction(TransactionType.Withdrawal, amount, at))
       case _ => Applicative[ConnectionIO].pure(0)
     }
     .map(_.sum)

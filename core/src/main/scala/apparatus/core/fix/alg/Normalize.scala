@@ -2,12 +2,13 @@ package apparatus.core.fix.alg
 
 import apparatus.core.Apparatus
 import apparatus.core.fix.{ApparatusF, HFix2}
-import apparatus.core.machines.{DeciderMaterializer, MealyMachine, OpenMealy}
+import apparatus.core.machines.{AggregateEntry, OpenMealy}
 import cats.{Foldable, Monad, Monoid}
 import cats.data.State
+import cats.effect.kernel.Ref
 import cats.implicits.*
 
-type NormalizedRegistry[F[_]] = Map[String, DeciderEntry[F]]
+type NormalizedRegistry[F[_]] = Map[String, AggregateEntry[F]]
 
 private type NormalizeState[F[_]] = (NormalizedRegistry[F], Map[String, OpenMealy[F, ?, ?]], Int)
 
@@ -19,12 +20,14 @@ def normalize[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O])
 private def go[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O]): State[NormalizeState[F], Apparatus[F, I, O]] =
   apparatus.unfix match {
 
-    case ApparatusF.DeciderMachine(networkId, decider, schema) =>
-      val entry = new DeciderEntry[F]:
-        def materialize(m: DeciderMaterializer[F]): F[MealyMachine[F, ?, ?]] =
-          m.materialize(decider, networkId)(using schema).asInstanceOf[F[MealyMachine[F, ?, ?]]]
-      State.modify[NormalizeState[F]] { case (reg, om, n) => (reg + (networkId -> entry), om, n) }
-        .as(HFix2(ApparatusF.Ref(networkId)))
+    case ApparatusF.AggregateMachine(aggregateType, entry) =>
+      State.get[NormalizeState[F]].flatMap { case (reg, om, n) =>
+        if reg.contains(aggregateType) then
+          State.pure(HFix2(ApparatusF.Ref(aggregateType)))
+        else
+          State.modify[NormalizeState[F]] { case (r, om, n) => (r + (aggregateType -> entry), om, n) }
+            .as(HFix2(ApparatusF.Ref(aggregateType)))
+      }
 
     case ApparatusF.ClosedMachine(machine) =>
       State.pure(HFix2(ApparatusF.ClosedMachine(machine)))

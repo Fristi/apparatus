@@ -2,7 +2,7 @@ package apparatus.core.fix.alg
 
 import apparatus.core.Apparatus
 import apparatus.core.fix.{ApparatusF, HAlgebra2, cata2}
-import apparatus.core.machines.{ClosedMealy, DeciderMaterializer, MealyMachine, OpenMealy}
+import apparatus.core.machines.{ClosedMealy, DeciderMaterializer, OpenMealy}
 import cats.effect.kernel.Ref
 import cats.implicits.*
 import cats.{Foldable, Monad, Monoid, ~>}
@@ -30,8 +30,8 @@ private def sealWithRef[F[_]: Monad, I, O](m: OpenMealy[F, I, O])(using Ref.Make
 /** Pure algebra: all machines are pre-sealed ClosedMealy, no state threading needed. */
 private def evalAlg[F[_]: Monad](machines: Map[String, ClosedMealy[F, ?, ?]]): HAlgebra2[ApparatusK[F], NetworkK[F]] =
   [I, O] => (node: ApparatusF[[x, y] =>> CompiledNetwork[F, x, y], F, I, O]) => node match {
-    case ApparatusF.DeciderMachine(_, _, _)     => sys.error("DeciderMachine reached evalAlg — normalize must be called first")
-    case ApparatusF.OpenMachine(_)              => sys.error("OpenMachine reached evalAlg — normalize must be called first")
+    case ApparatusF.AggregateMachine(_, _) => sys.error("AggregateMachine reached evalAlg — normalize must be called first")
+    case ApparatusF.OpenMachine(_)               => sys.error("OpenMachine reached evalAlg — normalize must be called first")
     case ApparatusF.ClosedMachine(machine)      => CompiledNetwork(machine.action)
     case ApparatusF.Ref(networkId)              => CompiledNetwork(machines(networkId).asInstanceOf[ClosedMealy[F, I, O]].action)
     case ApparatusF.Sequential(left, right)     => CompiledNetwork(i => left.run(i).flatMap(right.run))
@@ -50,36 +50,29 @@ private def evalAlg[F[_]: Monad](machines: Map[String, ClosedMealy[F, ?, ?]]): H
   }
 
 /** Two-phase compile:
- *  Phase 1 (pure): normalize — extract DeciderMachine and OpenMachine nodes into registries.
- *  Phase 2 (effectful): materialize deciders + seal all Open machines with Ref cells.
+ *  Phase 1 (pure): normalize — extract AggregateMachine and OpenMachine nodes into registries.
+ *  Phase 2 (effectful): compile aggregate routers + seal all Open machines with Ref cells.
  *  Phase 3 (pure): fold normalized tree with sealed machine map. */
 def compile[F[_]: Monad, I, O](materializer: DeciderMaterializer[F])(apparatus: Apparatus[F, I, O])(using Ref.Make[F]): F[CompiledNetwork[F, I, O]] = {
-  val (deciderRegistry, openMachineRegistry, normalized) = normalize(apparatus)
+  val (aggregateRegistry, openMachineRegistry, normalized) = normalize(apparatus)
 
-  val sealedDeciders: F[Map[String, ClosedMealy[F, ?, ?]]] =
-    materializeRegistry(deciderRegistry, materializer).flatMap { machines =>
-      machines.toList.traverse { case (id, machine) =>
-        machine match {
-          case MealyMachine.Open(m)   => sealWithRef(m.asInstanceOf[OpenMealy[F, ?, ?]]).map(id -> _)
-          case MealyMachine.Closed(m) => (id -> m.asInstanceOf[ClosedMealy[F, ?, ?]]).pure[F]
-        }
-      }.map(_.toMap)
-    }
+  val routingMachines: F[Map[String, ClosedMealy[F, ?, ?]]] =
+    compileRouters(aggregateRegistry, materializer)
 
   val sealedOpenMachines: F[Map[String, ClosedMealy[F, ?, ?]]] =
     openMachineRegistry.toList.traverse { case (id, m) =>
       sealWithRef(m.asInstanceOf[OpenMealy[F, ?, ?]]).map(id -> _)
     }.map(_.toMap)
 
-  (sealedDeciders, sealedOpenMachines).mapN { (deciders, openMachines) =>
-    cata2(evalAlg[F](deciders ++ openMachines))(normalized)
+  (routingMachines, sealedOpenMachines).mapN { (routers, openMachines) =>
+    cata2(evalAlg[F](routers ++ openMachines))(normalized)
   }
 }
 
-private[alg] def materializeRegistry[F[_]: Monad](entries: NormalizedRegistry[F], m: DeciderMaterializer[F]): F[Map[String, MealyMachine[F, ?, ?]]] =
+private[alg] def compileRouters[F[_]: Monad](entries: NormalizedRegistry[F], m: DeciderMaterializer[F])(using Ref.Make[F]): F[Map[String, ClosedMealy[F, ?, ?]]] =
   entries
     .toList
-    .traverse { case (id, entry) => entry.materialize(m).map(id -> _) }
+    .traverse { case (key, entry) => entry.compileRouter(m).map(key -> _) }
     .map(_.toMap)
 
 private def feedbackLoop[F[_]: Monad, A, B, N[_]](

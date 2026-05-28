@@ -9,37 +9,34 @@ import java.util.UUID
 import scala.util.NotGiven
 
 /** Postgres-backed [[EventStore]] using `pg_try_advisory_lock` for optimistic aggregate locking. */
-object PostgresEventStore extends EventStore[ConnectionIO] {
+object PostgresEventStore extends EventStore[doobie.free.connection.ConnectionIO] {
 
-  /** Uses `pg_try_advisory_lock` keyed on `hashtext(id)` — non-blocking, session-scoped. */
-  override def lockAggregate(networkId: String, aggregateId: UUID): ConnectionIO[Boolean] = {
-    val compositeId = s"${networkId}-${aggregateId.toString}"
-    sql"SELECT pg_try_advisory_lock(hashtext($compositeId))"
+  /** Uses `pg_try_advisory_lock` keyed on the aggregate UUID hash — non-blocking, session-scoped. */
+  override def lockAggregate(aggregateId: UUID): doobie.free.connection.ConnectionIO[Boolean] =
+    sql"SELECT pg_try_advisory_lock(hashtext(${aggregateId.toString}))"
       .query[Boolean]
       .unique
-  }
 
-  /** Reads all events for `id` ordered by `sequence_nr` ascending. */
-  override def loadAggregateStream[O : Schema](networkId: String, aggregateId: UUID): ConnectionIO[List[EventEntry[O]]] =
-    sql"SELECT sequence_nr, body FROM eventstreams WHERE network_id = $networkId AND aggregate_id = $aggregateId ORDER BY sequence_nr ASC"
+  /** Reads all events for `aggregateId` ordered by `sequence_nr` ascending. */
+  override def loadAggregateStream[O: Schema](aggregateId: UUID): doobie.free.connection.ConnectionIO[List[EventEntry[O]]] =
+    sql"SELECT sequence_nr, body FROM eventstreams WHERE aggregate_id = $aggregateId ORDER BY sequence_nr ASC"
       .query[EventEntry[O]]
       .to[List]
 
   /** Bulk-inserts `events` into `eventstreams`; returns the total number of rows inserted. */
-  override def appendAggregateStream[O : Schema](networkId: String, aggregateId: UUID, events: List[EventEntry[O]]): ConnectionIO[Int] =
-    Update[(String, UUID, EventEntry[O])]("INSERT INTO eventstreams (network_id, aggregate_id, sequence_nr, body) VALUES (?, ?, ?, ?)")
-      .updateMany(events.map((networkId, aggregateId, _)))
+  override def appendAggregateStream[O: Schema](aggregateId: UUID, events: List[EventEntry[O]]): doobie.free.connection.ConnectionIO[Int] =
+    Update[(UUID, EventEntry[O])]("INSERT INTO eventstreams (aggregate_id, sequence_nr, body) VALUES (?, ?, ?)")
+      .updateMany(events.map((aggregateId, _)))
 
-  override def create(): ConnectionIO[Int] =
+  override def create(): doobie.free.connection.ConnectionIO[Int] =
     sql"""
-                 CREATE TABLE IF NOT EXISTS eventstreams (
-                   network_id   TEXT NOT NULL,
-                   aggregate_id UUID NOT NULL,
-                   sequence_nr  INT  NOT NULL,
-                   body         TEXT NOT NULL,
-                   PRIMARY KEY (network_id, aggregate_id, sequence_nr)
-                 )
-               """.update.run
+      CREATE TABLE IF NOT EXISTS eventstreams (
+        aggregate_id UUID NOT NULL,
+        sequence_nr  INT  NOT NULL,
+        body         TEXT NOT NULL,
+        PRIMARY KEY (aggregate_id, sequence_nr)
+      )
+    """.update.run
 
 
   given [A](using Schema[A], NotGiven[Meta[A]]): Meta[A] =

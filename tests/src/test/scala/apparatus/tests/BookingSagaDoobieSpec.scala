@@ -46,7 +46,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
 
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BookingCommand): IO[List[SagaEvent[BookingStep]]] =
     val prg: Apparatus[ConnectionIO, BookingCommand, List[SagaEvent[BookingStep]]] = saga[ConnectionIO]()
-    val deciderMaterializer = EventStore.deciderMaterializer(PostgresEventStore, id)
+    val deciderMaterializer = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, deciderMaterializer).transact(xa)
 
   test("happy path: all steps complete in order") {
@@ -56,7 +56,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        events <- runCommand(xa)(id, BookingCommand.Start)
+        events <- runCommand(xa)(id, BookingCommand.Start(bookingId))
       yield assertEquals(events, List(
         SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
         SagaEvent.StepStarted(BookingStep.Hotel),
