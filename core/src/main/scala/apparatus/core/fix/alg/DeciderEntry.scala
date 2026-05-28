@@ -1,6 +1,11 @@
 package apparatus.core.fix.alg
 
-import apparatus.core.machines.{DeciderMaterializer, MealyMachine, OpenMealy}
+import apparatus.core.machines.{ClosedMealy, DeciderMaterializer}
+import cats.Monad
+import cats.effect.kernel.Ref
+import cats.implicits.*
 
-trait DeciderEntry[F[_]]:
-  def materialize(m: DeciderMaterializer[F]): F[MealyMachine[F, ?, ?]]
+import java.util.UUID
+
+trait AggregateEntry[F[_]]:
+  def compileRouter(m: DeciderMaterializer[F])(using Ref.Make[F], Monad[F]): F[ClosedMealy[F, ?, ?]]

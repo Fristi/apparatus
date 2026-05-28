@@ -4,6 +4,7 @@ import apparatus.core
 import apparatus.core.machines.{ClosedMealy, Decider, OpenMealy}
 import cats.{Foldable, Monoid}
 import zio.blocks.schema.Schema
+import java.util.UUID
 
 sealed trait ApparatusF[F[_, _], Eff[_], I, O]:
   def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O]
@@ -19,13 +20,14 @@ object ApparatusF:
   final case class ClosedMachine[F[_, _], Eff[_], I, O](machine: ClosedMealy[Eff, I, O]) extends ApparatusF[F, Eff, I, O]:
     def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, O] = ClosedMachine(machine)
 
-  final case class DeciderMachine[F[_, _], Eff[_], I, E](
-    networkId: String,
-    decider:   Decider[?, I, List[E]],
-    schema:    Schema[E]
+  final case class AggregateMachine[F[_, _], Eff[_], I, E](
+    aggregateType: String,
+    decider:       Decider[?, I, List[E]],
+    schema:        Schema[E],
+    extractId:     I => UUID
   ) extends ApparatusF[F, Eff, I, List[E]]:
     def hfmap[G[_, _]](nt: FunctionK2[F, G]): ApparatusF[G, Eff, I, List[E]] =
-      DeciderMachine(networkId, decider, schema)
+      AggregateMachine(aggregateType, decider, schema, extractId)
 
   final case class Sequential[F[_, _], Eff[_], A, B, C](
     left:  F[A, B],

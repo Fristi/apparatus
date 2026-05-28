@@ -46,9 +46,9 @@ object Mermaid:
   private def render[Eff[_], I, O](apparatus: Apparatus[Eff, I, O], ctx: Context): (String, String) =
     apparatus.unfix match
 
-      case ApparatusF.DeciderMachine(networkId, _, _) =>
+      case ApparatusF.AggregateMachine(aggregateType, _, _, _) =>
         val id = ctx.fresh("node")
-        ctx.node(id, networkId, Shape.Box)
+        ctx.node(id, aggregateType, Shape.Diamond)
         (id, id)
 
       case ApparatusF.Ref(networkId) =>

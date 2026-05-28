@@ -2,12 +2,15 @@ package apparatus.core.fix.alg
 
 import apparatus.core.Apparatus
 import apparatus.core.fix.{ApparatusF, HFix2}
-import apparatus.core.machines.{DeciderMaterializer, MealyMachine, OpenMealy}
+import apparatus.core.machines.{ClosedMealy, DeciderMaterializer, OpenMealy}
 import cats.{Foldable, Monad, Monoid}
 import cats.data.State
+import cats.effect.kernel.Ref
 import cats.implicits.*
 
-type NormalizedRegistry[F[_]] = Map[String, DeciderEntry[F]]
+import java.util.UUID
+
+type NormalizedRegistry[F[_]] = Map[String, AggregateEntry[F]]
 
 private type NormalizeState[F[_]] = (NormalizedRegistry[F], Map[String, OpenMealy[F, ?, ?]], Int)
 
@@ -19,12 +22,32 @@ def normalize[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O])
 private def go[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O]): State[NormalizeState[F], Apparatus[F, I, O]] =
   apparatus.unfix match {
 
-    case ApparatusF.DeciderMachine(networkId, decider, schema) =>
-      val entry = new DeciderEntry[F]:
-        def materialize(m: DeciderMaterializer[F]): F[MealyMachine[F, ?, ?]] =
-          m.materialize(decider, networkId)(using schema).asInstanceOf[F[MealyMachine[F, ?, ?]]]
-      State.modify[NormalizeState[F]] { case (reg, om, n) => (reg + (networkId -> entry), om, n) }
-        .as(HFix2(ApparatusF.Ref(networkId)))
+    case ApparatusF.AggregateMachine(aggregateType, decider, schema, extractId) =>
+      State.get[NormalizeState[F]].flatMap { case (reg, om, n) =>
+        if reg.contains(aggregateType) then
+          State.pure(HFix2(ApparatusF.Ref(aggregateType)))
+        else
+          val entry = new AggregateEntry[F]:
+            def compileRouter(m: DeciderMaterializer[F])(using Ref.Make[F], Monad[F]): F[ClosedMealy[F, ?, ?]] =
+              Ref[F].of(Map.empty[UUID, ClosedMealy[F, Any, Any]]).map { registry =>
+                new ClosedMealy[F, Any, Any]:
+                  def action(rawInput: Any): F[Any] =
+                    val i  = rawInput.asInstanceOf[I]
+                    val id = extractId(i)
+                    registry.get.flatMap { map =>
+                      map.get(id) match
+                        case Some(cm) => cm.action(i)
+                        case None     =>
+                          m.materialize(decider, id)(using schema)
+                            .asInstanceOf[F[ClosedMealy[F, Any, Any]]]
+                            .flatMap { cm =>
+                              registry.update(_ + (id -> cm)) *> cm.action(i)
+                            }
+                    }
+              }.asInstanceOf[F[ClosedMealy[F, ?, ?]]]
+          State.modify[NormalizeState[F]] { case (r, om, n) => (r + (aggregateType -> entry), om, n) }
+            .as(HFix2(ApparatusF.Ref(aggregateType)))
+      }
 
     case ApparatusF.ClosedMachine(machine) =>
       State.pure(HFix2(ApparatusF.ClosedMachine(machine)))

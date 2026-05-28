@@ -88,26 +88,21 @@ extension [S, I, O](decider: Decider[S, I, List[O]]) {
 
 
 
-enum MealyMachine[F[_], I, O]:
-  case Open(open: OpenMealy[F, I, O])
-  case Closed(closed: ClosedMealy[F, I, O])
-  
-trait DeciderMaterializer[F[_]] {
-  def materialize[S, I, O : Schema](apparatus: Decider[S, I, List[O]], networkId: String): F[MealyMachine[F, I, List[O]]]
-}
+trait DeciderMaterializer[F[_]]:
+  def materialize[S, I, O: Schema](
+    decider:     Decider[S, I, List[O]],
+    aggregateId: java.util.UUID
+  ): F[ClosedMealy[F, I, List[O]]]
 
-object DeciderMaterializer {
-  val syncIO: DeciderMaterializer[SyncIO] = new DeciderMaterializer[SyncIO] {
-    override def materialize[S, I, O: Schema](apparatus: Decider[S, I, List[O]], networkId: String): SyncIO[MealyMachine[SyncIO, I, List[O]]] =
-      Ref[SyncIO].of(apparatus.state).map { ref =>
-        MealyMachine.Closed(new ClosedMealy[SyncIO, I, List[O]]:
+object DeciderMaterializer:
+  val syncIO: DeciderMaterializer[SyncIO] = new DeciderMaterializer[SyncIO]:
+    override def materialize[S, I, O: Schema](decider: Decider[S, I, List[O]], aggregateId: java.util.UUID): SyncIO[ClosedMealy[SyncIO, I, List[O]]] =
+      Ref[SyncIO].of(decider.state).map { ref =>
+        new ClosedMealy[SyncIO, I, List[O]]:
           def action(input: I): SyncIO[List[O]] =
             ref.get.flatMap { s =>
-              val o  = apparatus.decide(input, s)
-              val ns = apparatus.evolve(o, s)
+              val o  = decider.decide(input, s)
+              val ns = decider.evolve(o, s)
               ref.set(ns).as(o)
             }
-        )
       }
-  }
-}

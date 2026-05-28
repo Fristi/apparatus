@@ -72,8 +72,10 @@ val doorProject: OpenMealy[SyncIO, List[DoorEvent], DoorStats] =
     }
   )
 
+private val doorId = java.util.UUID.fromString("00000000-0000-0000-0000-000000000001")
+
 def freshNetwork: Apparatus[SyncIO, DoorCommand, DoorStats] =
-  Apparatus.deciderMachine("door", door) >>> Apparatus.openMealy(doorProject)
+  Apparatus.aggregateMachine("door", door, _ => doorId) >>> Apparatus.openMealy(doorProject)
 
 def runAll[O: Monoid](fsm: Apparatus[SyncIO, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.syncIO).unsafeRunSync()

@@ -4,6 +4,7 @@ import apparatus.core
 import apparatus.core.fix.alg.Mermaid
 import apparatus.core.fix.{ApparatusF, HFix2, alg}
 import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
+import java.util.UUID
 import apparatus.core.Iso
 import cats.arrow.{Category, Choice, Profunctor, Strong}
 import cats.effect.kernel.Ref
@@ -20,8 +21,12 @@ type Apparatus[Eff[_], I, O] = HFix2[[F[_, _], I, O] =>> ApparatusF[F, Eff, I, O
 
 object Apparatus:
 
-  def deciderMachine[Eff[_], I, E](networkId: String, d: Decider[?, I, List[E]])(using S: Schema[E]): Apparatus[Eff, I, List[E]] =
-    HFix2(ApparatusF.DeciderMachine(networkId, d, S))
+  def aggregateMachine[Eff[_], I, E](
+    aggregateType: String,
+    d:             Decider[?, I, List[E]],
+    extractId:     I => UUID
+  )(using S: Schema[E]): Apparatus[Eff, I, List[E]] =
+    HFix2(ApparatusF.AggregateMachine(aggregateType, d, S, extractId))
 
   def sequential[Eff[_], A, B, C](left: Apparatus[Eff, A, B], right: Apparatus[Eff, B, C]): Apparatus[Eff, A, C] =
     HFix2(ApparatusF.Sequential(left, right))

@@ -46,7 +46,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
 
   def runCommand(xa: Transactor[IO])(id: UUID, cmd: BookingCommand): IO[List[SagaEvent[BookingStep]]] =
     val prg: Apparatus[ConnectionIO, BookingCommand, List[SagaEvent[BookingStep]]] = saga[ConnectionIO]()
-    val deciderMaterializer = EventStore.deciderMaterializer(PostgresEventStore, id)
+    val deciderMaterializer = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, deciderMaterializer).transact(xa)
 
   test("happy path: all steps complete in order") {
