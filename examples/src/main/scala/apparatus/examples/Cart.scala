@@ -56,12 +56,12 @@ enum CartView:
 
 val cartDecider: Decider[CartState, CartCommand, List[CartEvent]] =
   DeciderBuilder
-    .seed[CartState](CartState.WaitingForPayment)
+    .seed[CartState]("cart", CartState.WaitingForPayment)
     .decide[CartCommand, List[CartEvent]](_.decide(_))
     .evolveList(_.evolve(_))
 
 def cartMachine[F[_]: Applicative]: Apparatus[F, CartCommand, List[CartEvent]] =
-  Apparatus.aggregateMachine[F, CartCommand, CartEvent]("cart", cartDecider, _.id)
+  Apparatus.aggregateMachine[F, CartCommand, CartEvent](cartDecider, _.id)
 
 // ── Policy: payment gateway ───────────────────────────────────────────────────
 // In this world payments always succeed: CartPaymentInitiated triggers MarkCartAsPaid.
@@ -125,12 +125,12 @@ enum ShippingInfo:
 
 val shippingDecider: Decider[ShippingState, ShippingCommand, List[ShippingEvent]] =
   DeciderBuilder
-    .seed[ShippingState](ShippingState.Idle)
+    .seed[ShippingState]("shipping", ShippingState.Idle)
     .decide[ShippingCommand, List[ShippingEvent]](_.decide(_))
     .evolveList(_.evolve(_))
 
 def shippingMachine[F[_]: Applicative]: Apparatus[F, ShippingCommand, List[ShippingEvent]] =
-  Apparatus.aggregateMachine[F, ShippingCommand, ShippingEvent]("shipping", shippingDecider, _.id)
+  Apparatus.aggregateMachine[F, ShippingCommand, ShippingEvent](shippingDecider, _.id)
 
 // Haskell: shippingInfo = undefined
 def shippingInfo[F[_]: Applicative]: Apparatus[F, ShippingEvent, List[ShippingInfo]] =

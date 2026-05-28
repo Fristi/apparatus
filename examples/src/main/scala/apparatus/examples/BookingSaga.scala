@@ -37,7 +37,7 @@ def flightDecider(
   failsOnReserve:    Boolean    = false,
   failsOnCompensate: Boolean    = false
 ): Decider[FlightState, FlightCommand, List[FlightEvent]] =
-  DeciderBuilder.seed(FlightState.Idle)
+  DeciderBuilder.seed("flight", FlightState.Idle)
     .partiallyDecide[FlightCommand, FlightEvent]:
       case (FlightState.Idle,     cmd: FlightCommand.Reserve)    => if failsOnReserve    then List(FlightEvent.Failed(cmd.id))             else List(FlightEvent.Reserved(cmd.id))
       case (FlightState.Reserved, cmd: FlightCommand.Compensate) => if failsOnCompensate then List(FlightEvent.CompensationFailed(cmd.id)) else List(FlightEvent.Compensated(cmd.id))
@@ -68,7 +68,7 @@ def carDecider(
   failsOnReserve:    Boolean  = false,
   failsOnCompensate: Boolean  = false
 ): Decider[CarState, CarCommand, List[CarEvent]] =
-  DeciderBuilder.seed(CarState.Idle)
+  DeciderBuilder.seed("car", CarState.Idle)
     .partiallyDecide[CarCommand, CarEvent]:
       case (CarState.Idle,     cmd: CarCommand.Reserve)    => if failsOnReserve    then List(CarEvent.Failed(cmd.id))             else List(CarEvent.Reserved(cmd.id))
       case (CarState.Reserved, cmd: CarCommand.Compensate) => if failsOnCompensate then List(CarEvent.CompensationFailed(cmd.id)) else List(CarEvent.Compensated(cmd.id))
@@ -99,7 +99,7 @@ def hotelDecider(
   failsOnReserve:    Boolean    = false,
   failsOnCompensate: Boolean    = false
 ): Decider[HotelState, HotelCommand, List[HotelEvent]] =
-  DeciderBuilder.seed(HotelState.Idle)
+  DeciderBuilder.seed("hotel", HotelState.Idle)
     .partiallyDecide[HotelCommand, HotelEvent]:
       case (HotelState.Idle,     cmd: HotelCommand.Reserve)    => if failsOnReserve    then List(HotelEvent.Failed(cmd.id))             else List(HotelEvent.Reserved(cmd.id))
       case (HotelState.Reserved, cmd: HotelCommand.Compensate) => if failsOnCompensate then List(HotelEvent.CompensationFailed(cmd.id)) else List(HotelEvent.Compensated(cmd.id))
@@ -172,6 +172,7 @@ val hotelStep = new SagaStepAdapter[HotelCommand, HotelEvent, BookingStep] {
 
 
 val behavior: SagaBehavior[BookingCommand, BookingStep] = SagaBehaviorFactory(
+  name = "booking",
   startCommand = BookingCommand.Start(bookingId),
   prism = BookingCommand.advancePrism,
   steps = NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)
@@ -185,13 +186,13 @@ type HotelDecider = Decider[HotelState,  HotelCommand,  List[HotelEvent]]
 type BookingDecider = Decider[SagaState[BookingStep], BookingCommand, List[SagaEvent[BookingStep]]]
 
 private def flightServiceFSM[F[_] : Applicative](flight: FlightDecider): Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
-  flightStep.rmap(flightStep.lmapOrEmpty(Apparatus.aggregateMachine[F, FlightCommand, FlightEvent]("flight", flight, _.id)), BookingCommand.advancePrism).label("Flight service")
+  flightStep.rmap(flightStep.lmapOrEmpty(Apparatus.aggregateMachine[F, FlightCommand, FlightEvent](flight, _.id)), BookingCommand.advancePrism).label("Flight service")
 
 private def carServiceFSM[F[_] : Applicative](car: CarDecider): Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
-  carStep.rmap(carStep.lmapOrEmpty(Apparatus.aggregateMachine[F, CarCommand, CarEvent]("car", car, _.id)), BookingCommand.advancePrism).label("Car service")
+  carStep.rmap(carStep.lmapOrEmpty(Apparatus.aggregateMachine[F, CarCommand, CarEvent](car, _.id)), BookingCommand.advancePrism).label("Car service")
 
 private def hotelServiceFSM[F[_] : Applicative](hotel: HotelDecider): Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
-  hotelStep.rmap(hotelStep.lmapOrEmpty(Apparatus.aggregateMachine[F, HotelCommand, HotelEvent]("hotel", hotel, _.id)), BookingCommand.advancePrism).label("Hotel service")
+  hotelStep.rmap(hotelStep.lmapOrEmpty(Apparatus.aggregateMachine[F, HotelCommand, HotelEvent](hotel, _.id)), BookingCommand.advancePrism).label("Hotel service")
 
 private def makeServices[F[_] : Applicative](flight: FlightDecider, car: CarDecider, hotel: HotelDecider): Apparatus[F, SagaEvent[BookingStep], List[BookingCommand]] =
   flightServiceFSM[F](flight).merge(carServiceFSM[F](car).merge(hotelServiceFSM[F](hotel)))
@@ -201,7 +202,7 @@ def saga[F[_] : Applicative](
   car:    CarDecider    = carDecider(),
   hotel:  HotelDecider  = hotelDecider()
 ): Apparatus[F, BookingCommand, List[SagaEvent[BookingStep]]] =
-  Apparatus.aggregateMachine[F, BookingCommand, SagaEvent[BookingStep]]("booking", behavior.decider, _.id)
+  Apparatus.aggregateMachine[F, BookingCommand, SagaEvent[BookingStep]](behavior.decider, _.id)
     .feedback(makeServices[F](flight, car, hotel))
 
 def sagaRerootedAtCar[F[_] : Applicative](
@@ -211,5 +212,5 @@ def sagaRerootedAtCar[F[_] : Applicative](
   hotel:  HotelDecider  = hotelDecider()
 ): Apparatus[F, CarCommand, List[SagaEvent[BookingStep]]] =
   carStep
-    .rmap(Apparatus.aggregateMachine[F, CarCommand, CarEvent]("car", car, _.id), BookingCommand.advancePrism)
-    .andThen(Apparatus.aggregateMachine[F, BookingCommand, SagaEvent[BookingStep]]("booking", booking, _.id).feedbackMany(makeServices[F](flight, car, hotel)))
+    .rmap(Apparatus.aggregateMachine[F, CarCommand, CarEvent](car, _.id), BookingCommand.advancePrism)
+    .andThen(Apparatus.aggregateMachine[F, BookingCommand, SagaEvent[BookingStep]](booking, _.id).feedbackMany(makeServices[F](flight, car, hotel)))
