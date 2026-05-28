@@ -7,36 +7,64 @@ import cats.Monad
 
 object Mermaid:
 
+  /** Renders `apparatus` as a Mermaid `graph TD` diagram string.
+    *
+    * Normalises the network first (deduplicating aggregate machines into `Ref` nodes), then
+    * performs a recursive depth-first traversal to emit node declarations and edge statements.
+    *
+    * The returned string can be embedded in a Markdown fenced code block tagged `mermaid` to
+    * produce a visualisation in tools that support it (GitHub, Notion, etc.).
+    *
+    * @param apparatus the network to render
+    * @return a Mermaid diagram as a plain string
+    */
   def print[Eff[_] : Monad, I, O](apparatus: Apparatus[Eff, I, O]): String =
     val (_, _, normalized) = normalize(apparatus)
     val ctx = Context()
     render(normalized, ctx)
     "graph TD\n" + ctx.declarations.mkString("\n") + "\n" + ctx.edges.mkString("\n")
 
+  /** Mutable accumulator used during a single [[render]] traversal.
+    *
+    * Keeps node declarations and edge statements in insertion order so the emitted Mermaid
+    * source is human-readable and deterministic.
+    */
   private class Context:
     private var counter = 0
     val declarations = collection.mutable.ListBuffer.empty[String]
     val edges        = collection.mutable.ListBuffer.empty[String]
 
+    /** Allocates a unique Mermaid node ID with the given `prefix` (e.g. `"node"`, `"split"`). */
     def fresh(prefix: String): String =
       counter += 1
       s"${prefix}_$counter"
 
+    /** Emits a node declaration with the given `id`, display `label`, and `shape`. */
     def node(id: String, label: String, shape: Shape): Unit =
       declarations += shape.mermaid(id, label)
 
+    /** Emits a directed edge from `from` to `to`, optionally annotated with `label`. */
     def edge(from: String, to: String, label: String = ""): Unit =
       if label.isEmpty then edges += s"    $from --> $to"
       else edges += s"    $from -->|$label| $to"
 
+    /** Opens a named Mermaid subgraph block. Must be closed with [[closeSubgraph]]. */
     def openSubgraph(label: String): Unit =
       declarations += s"""    subgraph "$label" """
 
+    /** Closes the most recently opened subgraph block. */
     def closeSubgraph(): Unit =
       declarations += "    end"
 
+  /** Mermaid node shape variants.
+    *
+    *   - `Box`     — rectangular node `[label]` used for machines and references
+    *   - `Diamond` — decision/routing node `{label}` used for aggregate machines and filters
+    *   - `Stadium` — rounded-rectangle node `([label])` used for split/join and feedback ports
+    */
   private enum Shape:
     case Box, Diamond, Stadium
+    /** Returns the Mermaid syntax string for a node with this shape. */
     def mermaid(id: String, label: String): String = this match
       case Box     => s"""    $id["$label"]"""
       case Diamond => s"""    $id{"$label"}"""
@@ -46,9 +74,9 @@ object Mermaid:
   private def render[Eff[_], I, O](apparatus: Apparatus[Eff, I, O], ctx: Context): (String, String) =
     apparatus.unfix match
 
-      case ApparatusF.AggregateMachine(aggregateType, _) =>
+      case ApparatusF.AggregateMachine(name, _) =>
         val id = ctx.fresh("node")
-        ctx.node(id, aggregateType, Shape.Diamond)
+        ctx.node(id, name, Shape.Diamond)
         (id, id)
 
       case ApparatusF.Ref(networkId) =>
@@ -150,6 +178,11 @@ object Mermaid:
             ctx.closeSubgraph()
             result
 
+  /** Returns `true` when `apparatus` is a leaf node that renders as a single Mermaid node.
+    *
+    * Used by the [[render]] `Labeled` case to decide whether to emit an inline label or a
+    * subgraph block: leaf nodes get a simple renamed box; composite nodes get a subgraph.
+    */
   private def isLeaf[Eff[_], I, O](apparatus: Apparatus[Eff, I, O]): Boolean =
     apparatus.unfix match
       case _: ApparatusF.Ref[?, ?, ?, ?]         => true

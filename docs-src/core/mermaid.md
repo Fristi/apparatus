@@ -2,7 +2,7 @@
 
 `Mermaid` renders any `Apparatus` network as a [Mermaid](https://mermaid.js.org)
 flowchart. Only the structural topology is shown — internal state and transition
-functions are erased at runtime — but labels make a diagram easier to digest how the network is setup.
+functions are erased at runtime — but labels make a diagram easy to read.
 
 ```scala mdoc:silent
 import apparatus.core.*
@@ -14,28 +14,28 @@ import cats.implicits.*
 
 ## Basic usage
 
-```scala
-val diagram: String = Mermaid.print(myMachine)
+```scala mdoc:silent
+val diagram: String = Mermaid.print(saga[Id]())
 ```
 
 Paste the result into [mermaid.live](https://mermaid.live) or drop it into a Markdown renderer
-that supports Mermaid fenced code blocks.
+that supports Mermaid fenced code blocks. Alternatively call `.mermaid` as an extension method:
+
+```scala mdoc:silent
+val diagram2: String = saga[Id]().mermaid
+```
 
 ## Attaching labels
 
 Call `.label("…")` on any sub-machine before passing the network to `print`.
-The booking saga example already bakes labels into every service machine and the orchestrator,
-so `saga()` produces a fully annotated network:
-
-```scala mdoc:silent
-val diagram = Mermaid.print(saga[Id]())
-```
+The booking saga example bakes labels into every service machine and the orchestrator,
+so `saga()` produces a fully annotated network.
 
 Label semantics depend on what the node is:
 
 | Expression | Effect in diagram |
 |---|---|
-| `basic.label("X")` | Renames the rectangle to `X` |
+| `closedMealy(m).label("X")` | Renames the box to `X` |
 | `lmapOrEmpty{…}.label("X")` | Renames the filter diamond to `X` |
 | `composite.label("X")` | Wraps the entire sub-graph in `subgraph "X"` |
 
@@ -43,34 +43,34 @@ Label semantics depend on what the node is:
 
 | Mermaid shape | Apparatus node |
 |---|---|
-| `["name"]` rectangle | `Apparatus.deciderMachine` / `Apparatus.closedMealy` — a single machine node |
-| `{"name"}` diamond | `Apparatus.Alternative` (routing) or `Apparatus.LmapOrEmpty` (filter) |
+| `["name"]` rectangle | `aggregateMachine`, `closedMealy`, or `openMealy` — a single machine node |
+| `{"name"}` diamond | `Alternative` (routing) or `LmapOrEmpty` (filter) |
 | `(["name"])` stadium | Structural `split`, `join`, `fan-out`, `combine` connectors |
 
 ## Example output
 
-`Mermaid.print(saga())` for the three-service booking saga:
+`Mermaid.print(saga[Id]())` for the three-service booking saga:
 
 ```mermaid
 graph TD
-    node_1["Booking Saga"]
+    node_1["booking"]
     fan_2(["fan-out"])
     combine_3(["combine"])
     fan_4(["fan-out"])
     combine_5(["combine"])
-    subgraph "Flight Service"
-      filter_6{"Flight Event Router"}
-      node_7["Flight Decider"]
+    subgraph "Flight service"
+      filter_6{"flight event router"}
+      node_7["flight"]
       node_8["Machine"]
     end
-    subgraph "Car Service"
-      filter_9{"Car Event Router"}
-      node_10["Car Decider"]
+    subgraph "Car service"
+      filter_9{"car event router"}
+      node_10["car"]
       node_11["Machine"]
     end
-    subgraph "Hotel Service"
-      filter_12{"Hotel Event Router"}
-      node_13["Hotel Decider"]
+    subgraph "Hotel service"
+      filter_12{"hotel event router"}
+      node_13["hotel"]
       node_14["Machine"]
     end
     filter_6 -->|defined| node_7
@@ -93,26 +93,24 @@ graph TD
 
 ## Feedback back-edges
 
-`Apparatus.Feedback` (`<->`) and `Apparatus.FeedbackMany` produce back-edges labelled `A ↺`
-and `N[A] ↺` respectively. Mermaid renders these as curved arrows that close the loop visually.
+`Apparatus.feedback` and `Apparatus.feedbackMany` produce back-edges labelled `A ↺` and
+`N[A] ↺` respectively. Mermaid renders these as arrows that close the loop visually.
 
 ## Labeling intermediate nodes
 
-The most useful pattern is to label every `deciderMachine` node that wraps a domain decider
-and every `lmapOrEmpty` filter:
+The most useful pattern is to label every `aggregateMachine` node that wraps a domain
+decider and every `lmapOrEmpty` filter. The `SagaStepAdapter.lmapOrEmpty` method does
+this automatically, adding a `"<step> event router"` label.
 
-```scala
-def labeledFlightService(flight: Decider[FlightState, FlightCommand, List[FlightEvent]]) = {
-  val flightDecider = Apparatus.Fresh(flight.toBaseMachine[Id]).label("Flight Decider")
-  val flightService = flightDecider
-    .lmapOrEmpty[SagaEvent[BookingStep]] {
-      case SagaEvent.StepStarted(BookingStep.Flight) => FlightCommand.Reserve
-    }
-    .label("Flight Event Router")
-    .rmap(_.collect {
-      case FlightEvent.Reserved => BookingCommand.MarkFlightComplete
-    })
+Manual labeling:
 
-  flightService.label("Flight Service")
-}
+```scala mdoc:silent
+import apparatus.examples.*
+import cats.effect.SyncIO
+import java.util.UUID
+
+val labeled: Apparatus[SyncIO, FlightCommand, List[FlightEvent]] =
+  Apparatus
+    .aggregateMachine[SyncIO, FlightCommand, FlightEvent](flightDecider(), _.id)
+    .label("Flight Decider")
 ```

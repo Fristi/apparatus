@@ -59,7 +59,7 @@ object DoorStats:
 
 val door: Decider[DoorState, DoorCommand, List[DoorEvent]] =
   DeciderBuilder
-    .seed[DoorState](DoorState.Closed(0))
+    .seed[DoorState]("door", DoorState.Closed(0))
     .decide[DoorCommand, List[DoorEvent]](_.decide(_))
     .evolveList(_.evolve(_))
 
@@ -79,7 +79,7 @@ val doorProject: OpenMealy[SyncIO, List[DoorEvent], DoorStats] =
 private val doorId = java.util.UUID.fromString("00000000-0000-0000-0000-000000000001")
 
 def freshNetwork: Apparatus[SyncIO, DoorCommand, DoorStats] =
-  Apparatus.aggregateMachine("door", door, _.id) >>> Apparatus.openMealy(doorProject)
+  Apparatus.aggregateMachine(door, _.id) >>> Apparatus.openMealy(doorProject)
 
 def runAll[O: Monoid](fsm: Apparatus[SyncIO, DoorCommand, O], cmds: DoorCommand*): O =
   Apparatus.runMultiple(fsm, cmds, DeciderMaterializer.syncIO).unsafeRunSync()

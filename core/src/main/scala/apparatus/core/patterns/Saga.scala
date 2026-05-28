@@ -39,7 +39,10 @@ enum SagaPhase {
   * @tparam A the inner focus type — typically a tuple of structured data
   */
 trait Prism[S, A] {
+  /** Extracts the focus `A` from `input`, or `None` if `input` belongs to a different variant. */
   def getOption(input: S): Option[A]
+
+  /** Reconstructs the outer type `S` from a focus value `A`. */
   def reverseGet(input: A): S
 }
 
@@ -175,7 +178,20 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
     apparatus.rmap(evs => evs.flatMap((ev: Evt) => classify(ev).map((phase, result) => prism.reverseGet(step, phase, result))))
 }
 
-case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](startCommand: Cmd, prism: SagaAdvancePrism[Cmd, Stp], steps: NonEmptySet[Stp]) extends SagaBehavior[Cmd, Stp] {
+/** Convenience constructor for [[SagaBehavior]] that derives [[stepHandler]] and
+  * [[compensationHandler]] from a [[SagaAdvancePrism]].
+  *
+  * Use this instead of manually implementing the trait when a prism already encodes the
+  * command ↔ `(step, phase, result)` mapping.
+  *
+  * @param name         aggregate name for the saga decider
+  * @param startCommand command that boots the saga from [[SagaState.Waiting]]
+  * @param prism        bidirectional mapping between commands and advance triples
+  * @param steps        ordered set of forward steps for this saga
+  * @tparam Cmd command type
+  * @tparam Stp step type; must have `Eq`, `Order`, and `Show` instances
+  */
+case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](name: String, startCommand: Cmd, prism: SagaAdvancePrism[Cmd, Stp], steps: NonEmptySet[Stp]) extends SagaBehavior[Cmd, Stp] {
     override val stepHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
       Function.unlift(cmd => prism.getOption(cmd).filter((_, phase, _) => phase == SagaPhase.Forward).map((stp, _, result) => (stp, result)))
     override val compensationHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
@@ -304,6 +320,8 @@ object SagaEvent:
   *              stored in a `SortedSet` and compared safely
   */
 trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
+  /** Aggregate name used as the [[Decider]] name and for logging / Mermaid diagrams. */
+  def name: String
 
   /** The command that transitions [[SagaState.Waiting]] → [[SagaState.Running]]. */
   def startCommand: Cmd
@@ -434,6 +452,6 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     * Lift it into an Apparatus with `behavior.decider.toBaseMachine`.
     */
   def decider: Decider[SagaState[Step], Cmd, List[SagaEvent[Step]]] =
-    DeciderBuilder.seed[SagaState[Step]](SagaState.Waiting())
+    DeciderBuilder.seed[SagaState[Step]](name, SagaState.Waiting())
       .decide[Cmd, List[SagaEvent[Step]]]((s, i) => decide(s, i))
       .evolveList((s, e) => evolve(s, e))

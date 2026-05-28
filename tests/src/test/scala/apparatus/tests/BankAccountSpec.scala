@@ -48,7 +48,7 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
     yield ()
 
   def prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] =
-    Apparatus.aggregateMachineE[ConnectionIO, BankAccountState, BankAccountCommand, BankAccountError, BankAccountEvent]("bank-account", bankAccount, _.id)
+    Apparatus.aggregateMachineE[ConnectionIO, BankAccountState, BankAccountCommand, BankAccountError, BankAccountEvent](bankAccount, _.id)
       .tap(transactionsProjection(DoobieBankAccountTransactionRepository))
 
   // Not used for routing but required by Apparatus.runSteps signature; aggregateMachineE

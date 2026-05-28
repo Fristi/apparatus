@@ -8,25 +8,48 @@ import cats.data.State
 import cats.effect.kernel.Ref
 import cats.implicits.*
 
+/** Maps aggregate names to their [[AggregateEntry]] factories after normalisation.
+  *
+  * Built by [[normalize]] and consumed by `alg.compile` to wire up per-UUID routing at
+  * network compilation time.
+  */
 type NormalizedRegistry[F[_]] = Map[String, AggregateEntry[F]]
 
+/** Internal accumulator threaded through the [[go]] state traversal.
+  *
+  * Tracks:
+  *   - the `NormalizedRegistry` of deduplicated aggregate entries
+  *   - the map of auto-generated IDs to [[OpenMealy]] machines (converted from `OpenMachine` nodes)
+  *   - a monotone counter used to generate unique IDs for `OpenMachine` nodes
+  */
 private type NormalizeState[F[_]] = (NormalizedRegistry[F], Map[String, OpenMealy[F, ?, ?]], Int)
 
+/** Traverses `apparatus`, deduplicates `AggregateMachine` nodes into a flat registry,
+  * and assigns stable IDs to `OpenMachine` nodes so they can be backed by a shared `Ref`.
+  *
+  * Returns a triple of:
+  *   - the aggregate registry (name → [[AggregateEntry]])
+  *   - the open-machine map (auto-id → [[OpenMealy]])
+  *   - the normalised tree with `AggregateMachine`/`OpenMachine` replaced by `Ref` nodes
+  */
 def normalize[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O])
   : (NormalizedRegistry[F], Map[String, OpenMealy[F, ?, ?]], Apparatus[F, I, O]) =
   go(apparatus).run((Map.empty, Map.empty, 0)).value match
     case ((registry, openMachines, _), tree) => (registry, openMachines, tree)
 
+/** Recursive worker for [[normalize]].  Processes one node at a time, threading the
+  * accumulator via `State`.
+  */
 private def go[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O]): State[NormalizeState[F], Apparatus[F, I, O]] =
   apparatus.unfix match {
 
-    case ApparatusF.AggregateMachine(aggregateType, entry) =>
+    case ApparatusF.AggregateMachine(name, entry) =>
       State.get[NormalizeState[F]].flatMap { case (reg, om, n) =>
-        if reg.contains(aggregateType) then
-          State.pure(HFix2(ApparatusF.Ref(aggregateType)))
+        if reg.contains(name) then
+          State.pure(HFix2(ApparatusF.Ref(name)))
         else
-          State.modify[NormalizeState[F]] { case (r, om, n) => (r + (aggregateType -> entry), om, n) }
-            .as(HFix2(ApparatusF.Ref(aggregateType)))
+          State.modify[NormalizeState[F]] { case (r, om, n) => (r + (name -> entry), om, n) }
+            .as(HFix2(ApparatusF.Ref(name)))
       }
 
     case ApparatusF.ClosedMachine(machine) =>
@@ -72,6 +95,7 @@ private def go[F[_]: Monad, I, O](apparatus: Apparatus[F, I, O]): State[Normaliz
       go(inner).map(i => HFix2(ApparatusF.Labeled(i, name)))
   }
 
+/** Normalises the two branches of a [[ApparatusF.Feedback]] node. */
 private def goFeedback[F[_]: Monad, A, B, N[_]](
   left:     Apparatus[F, A, N[B]],
   right:    Apparatus[F, B, N[A]],
@@ -81,6 +105,7 @@ private def goFeedback[F[_]: Monad, A, B, N[_]](
 ): State[NormalizeState[F], Apparatus[F, A, N[B]]] =
   (go(left), go(right)).mapN((l, r) => HFix2(ApparatusF.Feedback(l, r, foldN, monoidNB, monoidNA)))
 
+/** Normalises the two branches of a [[ApparatusF.FeedbackMany]] node. */
 private def goFeedbackMany[F[_]: Monad, A, B, N[_]](
   left:     Apparatus[F, A, N[B]],
   right:    Apparatus[F, B, N[A]],

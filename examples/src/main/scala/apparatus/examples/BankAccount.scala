@@ -81,7 +81,7 @@ enum BankAccountEvent derives Schema:
 
 val bankAccount: Decider[BankAccountState, BankAccountCommand, Either[BankAccountError, List[BankAccountEvent]]] =
   DeciderBuilder
-    .seed[BankAccountState](BankAccountState.Uninitialized)
+    .seed[BankAccountState]("bank-account", BankAccountState.Uninitialized)
     .decide[BankAccountCommand, Either[BankAccountError, List[BankAccountEvent]]](_.decide(_))
     .evolveErrorList(_.evolve(_))
 
