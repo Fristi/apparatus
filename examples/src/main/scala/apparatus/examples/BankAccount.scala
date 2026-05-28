@@ -12,6 +12,14 @@ import zio.blocks.schema.Schema
 import java.time.Instant
 import java.util.UUID
 
+sealed abstract class BankAccountError(msg: String) extends Exception(msg)
+object BankAccountError:
+  case object NotInitialized   extends BankAccountError("account not initialized")
+  case object AlreadyOpen      extends BankAccountError("account already open")
+  case object AlreadyClosed    extends BankAccountError("account is closed")
+  case class  InvalidAmount(reason: String) extends BankAccountError(reason)
+  case object InsufficientFunds extends BankAccountError("insufficient funds")
+
 enum BankAccountState:
   case Uninitialized
   case Active(balance: BigDecimal)
@@ -34,20 +42,24 @@ enum BankAccountState:
       case BankAccountState.Closed => this
     }
 
-  def decide(cmd: BankAccountCommand): List[BankAccountEvent] = 
+  def decide(cmd: BankAccountCommand): Either[BankAccountError, List[BankAccountEvent]] =
     this match {
       case BankAccountState.Uninitialized => cmd match {
-        case BankAccountCommand.Open(id, at) => List(BankAccountEvent.Opened(id, at))
-        case other => List(BankAccountEvent.Rejected(other.id, "invalid command for current state"))
+        case BankAccountCommand.Open(id, at) => Right(List(BankAccountEvent.Opened(id, at)))
+        case _                               => Left(BankAccountError.NotInitialized)
       }
       case BankAccountState.Active(balance) => cmd match {
-        case BankAccountCommand.Deposit(id, amount, at) => List(if (amount <= 0) BankAccountEvent.Rejected(id, "amount must be positive") else BankAccountEvent.Deposited(id, amount, at))
+        case BankAccountCommand.Deposit(id, amount, at) =>
+          if amount <= 0 then Left(BankAccountError.InvalidAmount("amount must be positive"))
+          else Right(List(BankAccountEvent.Deposited(id, amount, at)))
         case BankAccountCommand.Withdraw(id, amount, at) =>
-          List(if (amount <= 0) BankAccountEvent.Rejected(id, "amount must be positive") else if (amount > balance) BankAccountEvent.Rejected(id, "insufficient funds") else BankAccountEvent.Withdrawn(id, amount, at))
-        case BankAccountCommand.Close(id, at) => List(BankAccountEvent.ClosedAccount(id, at))
-        case _ => Nil
+          if amount <= 0 then Left(BankAccountError.InvalidAmount("amount must be positive"))
+          else if amount > balance then Left(BankAccountError.InsufficientFunds)
+          else Right(List(BankAccountEvent.Withdrawn(id, amount, at)))
+        case BankAccountCommand.Close(id, at) => Right(List(BankAccountEvent.ClosedAccount(id, at)))
+        case _                                => Left(BankAccountError.AlreadyOpen)
       }
-      case BankAccountState.Closed => List(BankAccountEvent.Rejected(cmd.id, "invalid command for current state"))
+      case BankAccountState.Closed => Left(BankAccountError.AlreadyClosed)
     }
 
 sealed trait BankAccountCommand {
@@ -65,14 +77,13 @@ enum BankAccountEvent derives Schema:
   case Deposited(id: UUID, amount: BigDecimal, at: Instant)
   case Withdrawn(id: UUID, amount: BigDecimal, at: Instant)
   case ClosedAccount(id: UUID, at: Instant)
-  case Rejected(id: UUID, reason: String)
 
 
-val bankAccount: Decider[BankAccountState, BankAccountCommand, List[BankAccountEvent]] =
+val bankAccount: Decider[BankAccountState, BankAccountCommand, Either[BankAccountError, List[BankAccountEvent]]] =
   DeciderBuilder
     .seed[BankAccountState](BankAccountState.Uninitialized)
-    .decide[BankAccountCommand, List[BankAccountEvent]](_.decide(_))
-    .evolveList(_.evolve(_))
+    .decide[BankAccountCommand, Either[BankAccountError, List[BankAccountEvent]]](_.decide(_))
+    .evolveErrorList(_.evolve(_))
 
 def transactionsProjection(repo: BankAccountTransactionRepository[ConnectionIO]): Apparatus[ConnectionIO, List[BankAccountEvent], Int] =
   Apparatus.closedMealy(ClosedMealy.stateless[ConnectionIO, List[BankAccountEvent], Int] { evs =>

@@ -3,7 +3,8 @@ package apparatus.core
 import apparatus.core
 import apparatus.core.fix.alg.Mermaid
 import apparatus.core.fix.{ApparatusF, HFix2, alg}
-import apparatus.core.machines.{ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
+import apparatus.core.machines.{AggregateEntry, ClosedMealy, Decider, DeciderMaterializer, OpenMealy}
+import cats.MonadThrow
 import java.util.UUID
 import apparatus.core.Iso
 import cats.arrow.{Category, Choice, Profunctor, Strong}
@@ -25,8 +26,62 @@ object Apparatus:
     aggregateType: String,
     d:             Decider[?, I, List[E]],
     extractId:     I => UUID
-  )(using S: Schema[E]): Apparatus[Eff, I, List[E]] =
-    HFix2(ApparatusF.AggregateMachine(aggregateType, d, S, extractId))
+  )(using S: Schema[E]): Apparatus[Eff, I, List[E]] = {
+    val entry = new AggregateEntry[Eff]:
+      def compileRouter(m: DeciderMaterializer[Eff])(using Ref.Make[Eff], Monad[Eff]): Eff[ClosedMealy[Eff, ?, ?]] =
+        Ref[Eff].of(Map.empty[UUID, ClosedMealy[Eff, Any, Any]]).map { registry =>
+          new ClosedMealy[Eff, Any, Any]:
+            def action(rawInput: Any): Eff[Any] =
+              val i  = rawInput.asInstanceOf[I]
+              val id = extractId(i)
+              registry.get.flatMap { map =>
+                map.get(id) match
+                  case Some(cm) => cm.action(i)
+                  case None     =>
+                    m.materialize(d, id)(using S)
+                      .asInstanceOf[Eff[ClosedMealy[Eff, Any, Any]]]
+                      .flatMap { cm => registry.update(_ + (id -> cm)) *> cm.action(i) }
+              }
+        }.asInstanceOf[Eff[ClosedMealy[Eff, ?, ?]]]
+    HFix2(ApparatusF.AggregateMachine(aggregateType, entry))
+  }
+
+  /** Per-UUID routing for an Either-typed Decider. On Left(err): raises into F via MonadThrow —
+   *  downstream nodes (projections) never run. On Right(events): standard state evolution.
+   *  Uses per-UUID Ref[S] (same granularity as [[aggregateMachine]]). Bypasses DeciderMaterializer.
+   */
+  def aggregateMachineE[Eff[_], S, I, Err <: Throwable, E](
+    aggregateType: String,
+    d:             Decider[S, I, Either[Err, List[E]]],
+    extractId:     I => UUID
+  )(using mt: MonadThrow[Eff]): Apparatus[Eff, I, List[E]] = {
+    val entry = new AggregateEntry[Eff]:
+      def compileRouter(m: DeciderMaterializer[Eff])(using make: Ref.Make[Eff], monad: Monad[Eff]): Eff[ClosedMealy[Eff, ?, ?]] =
+        Ref[Eff].of(Map.empty[UUID, ClosedMealy[Eff, Any, Any]]).map { registry =>
+          new ClosedMealy[Eff, Any, Any]:
+            def action(rawInput: Any): Eff[Any] =
+              val i  = rawInput.asInstanceOf[I]
+              val id = extractId(i)
+              registry.get.flatMap { map =>
+                map.get(id) match
+                  case Some(cm) => cm.action(i)
+                  case None     =>
+                    Ref[Eff].of(d.state).map { stateRef =>
+                      new ClosedMealy[Eff, Any, Any]:
+                        def action(rawInput: Any): Eff[Any] =
+                          val inp = rawInput.asInstanceOf[I]
+                          stateRef.get.flatMap { s =>
+                            d.decide(inp, s) match
+                              case Left(err)     => mt.raiseError(err)
+                              case Right(events) =>
+                                val ns = d.evolve(Right(events), s)
+                                stateRef.set(ns).as(events.asInstanceOf[Any])
+                          }
+                    }.flatMap { cm => registry.update(_ + (id -> cm)) *> cm.action(i) }
+              }
+        }.asInstanceOf[Eff[ClosedMealy[Eff, ?, ?]]]
+    HFix2(ApparatusF.AggregateMachine(aggregateType, entry))
+  }
 
   def sequential[Eff[_], A, B, C](left: Apparatus[Eff, A, B], right: Apparatus[Eff, B, C]): Apparatus[Eff, A, C] =
     HFix2(ApparatusF.Sequential(left, right))

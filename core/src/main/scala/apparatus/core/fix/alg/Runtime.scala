@@ -30,7 +30,7 @@ private def sealWithRef[F[_]: Monad, I, O](m: OpenMealy[F, I, O])(using Ref.Make
 /** Pure algebra: all machines are pre-sealed ClosedMealy, no state threading needed. */
 private def evalAlg[F[_]: Monad](machines: Map[String, ClosedMealy[F, ?, ?]]): HAlgebra2[ApparatusK[F], NetworkK[F]] =
   [I, O] => (node: ApparatusF[[x, y] =>> CompiledNetwork[F, x, y], F, I, O]) => node match {
-    case ApparatusF.AggregateMachine(_, _, _, _) => sys.error("AggregateMachine reached evalAlg — normalize must be called first")
+    case ApparatusF.AggregateMachine(_, _) => sys.error("AggregateMachine reached evalAlg — normalize must be called first")
     case ApparatusF.OpenMachine(_)               => sys.error("OpenMachine reached evalAlg — normalize must be called first")
     case ApparatusF.ClosedMachine(machine)      => CompiledNetwork(machine.action)
     case ApparatusF.Ref(networkId)              => CompiledNetwork(machines(networkId).asInstanceOf[ClosedMealy[F, I, O]].action)

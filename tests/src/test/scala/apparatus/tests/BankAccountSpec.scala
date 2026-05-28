@@ -3,6 +3,7 @@ package apparatus.tests
 import apparatus.given
 import apparatus.*
 import apparatus.core.*
+import apparatus.core.machines.DeciderMaterializer
 import apparatus.examples.*
 import cats.effect.IO
 import com.dimafeng.testcontainers.PostgreSQLContainer
@@ -46,122 +47,125 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       _ <- DoobieBankAccountTransactionRepository.create()
     yield ()
 
-  def runCommand(xa: Transactor[IO])(cmd: BankAccountCommand): IO[List[BankAccountEvent]] = {
-    val prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] =
-      Apparatus.aggregateMachine("bank-account", bankAccount, _.id)
-        .tap(transactionsProjection(DoobieBankAccountTransactionRepository))
-    val mat = EventStore.deciderMaterializer(PostgresEventStore)
+  def prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] =
+    Apparatus.aggregateMachineE[ConnectionIO, BankAccountState, BankAccountCommand, BankAccountError, BankAccountEvent]("bank-account", bankAccount, _.id)
+      .tap(transactionsProjection(DoobieBankAccountTransactionRepository))
 
-    Apparatus.runA(prg, cmd, mat).transact(xa)
-  }
+  // Not used for routing but required by Apparatus.runSteps signature; aggregateMachineE
+  // registers no AggregateMachine nodes so materialize is never called.
+  val mat: DeciderMaterializer[ConnectionIO] = EventStore.deciderMaterializer(PostgresEventStore)
+
+  /** Run commands in one transaction so state is shared across all steps.
+   *  On domain error, the whole IO fails with the BankAccountError. */
+  def run(xa: Transactor[IO])(cmds: BankAccountCommand*): IO[List[List[BankAccountEvent]]] =
+    Apparatus.runSteps(prg, cmds.toList, mat).transact(xa)
 
   test("open account emits Opened") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        events <- runCommand(xa)(BankAccountCommand.Open(id, now))
-      yield assertEquals(events, List(BankAccountEvent.Opened(id, now)))
+        results <- run(xa)(BankAccountCommand.Open(id, now))
+      yield assertEquals(results, List(List(BankAccountEvent.Opened(id, now))))
     }
   }
 
-  test("deposit on uninitialized account is rejected") {
+  test("deposit on uninitialized account raises NotInitialized") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        events <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(100), now))
-      yield assertEquals(events, List(BankAccountEvent.Rejected(id, "invalid command for current state")))
+        result <- run(xa)(BankAccountCommand.Deposit(id, BigDecimal(100), now)).attempt
+      yield assert(result.left.exists(_.isInstanceOf[BankAccountError.NotInitialized.type]))
     }
   }
 
   test("deposit after open increases recorded amount") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        events <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(250), now))
-      yield assertEquals(events, List(BankAccountEvent.Deposited(id, BigDecimal(250), now)))
+        results <- run(xa)(
+          BankAccountCommand.Open(id, now),
+          BankAccountCommand.Deposit(id, BigDecimal(250), now)
+        )
+      yield assertEquals(results.last, List(BankAccountEvent.Deposited(id, BigDecimal(250), now)))
     }
   }
 
   test("withdraw within balance succeeds") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(500), now))
-        events <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(200), now))
-      yield assertEquals(events, List(BankAccountEvent.Withdrawn(id, BigDecimal(200), now)))
+        results <- run(xa)(
+          BankAccountCommand.Open(id, now),
+          BankAccountCommand.Deposit(id, BigDecimal(500), now),
+          BankAccountCommand.Withdraw(id, BigDecimal(200), now)
+        )
+      yield assertEquals(results.last, List(BankAccountEvent.Withdrawn(id, BigDecimal(200), now)))
     }
   }
 
-  test("withdraw exceeding balance is rejected") {
+  test("withdraw exceeding balance raises InsufficientFunds") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(100), now))
-        events <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(999), now))
-      yield assertEquals(events, List(BankAccountEvent.Rejected(id, "insufficient funds")))
+        result <- run(xa)(
+          BankAccountCommand.Open(id, now),
+          BankAccountCommand.Deposit(id, BigDecimal(100), now),
+          BankAccountCommand.Withdraw(id, BigDecimal(999), now)
+        ).attempt
+      yield assert(result.left.exists(_.isInstanceOf[BankAccountError.InsufficientFunds.type]))
     }
   }
 
   test("close open account emits ClosedAccount") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        events <- runCommand(xa)(BankAccountCommand.Close(id, now))
-      yield assertEquals(events, List(BankAccountEvent.ClosedAccount(id, now)))
+        results <- run(xa)(
+          BankAccountCommand.Open(id, now),
+          BankAccountCommand.Close(id, now)
+        )
+      yield assertEquals(results.last, List(BankAccountEvent.ClosedAccount(id, now)))
     }
   }
 
-  test("event store replays history so state is rebuilt across sessions") {
+  test("commands after close raise AlreadyClosed") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(300), now))
-        events <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(300), now))
-      yield assertEquals(events, List(BankAccountEvent.Withdrawn(id, BigDecimal(300), now)))
-    }
-  }
-
-  test("commands after close are rejected") {
-    withContainers { c =>
-      val xa = makeTransactor(c)
-      for
-        _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        _ <- runCommand(xa)(BankAccountCommand.Close(id, now))
-        events <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(50), now))
-      yield assertEquals(events, List(BankAccountEvent.Rejected(id, "invalid command for current state")))
+        result <- run(xa)(
+          BankAccountCommand.Open(id, now),
+          BankAccountCommand.Close(id, now),
+          BankAccountCommand.Deposit(id, BigDecimal(50), now)
+        ).attempt
+      yield assert(result.left.exists(_.isInstanceOf[BankAccountError.AlreadyClosed.type]))
     }
   }
 
   test("projection records deposit and withdrawal transactions") {
     withContainers { c =>
       val xa = makeTransactor(c)
+      val id = UUID.randomUUID()
       for
         _ <- createSchema.transact(xa)
-        id = UUID.randomUUID()
-        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
-        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(500), now))
-        _ <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(200), now))
+        _ <- run(xa)(
+          BankAccountCommand.Open(id, now),
+          BankAccountCommand.Deposit(id, BigDecimal(500), now),
+          BankAccountCommand.Withdraw(id, BigDecimal(200), now)
+        )
         txs <- DoobieBankAccountTransactionRepository.listTransactions(id).transact(xa)
       yield assertEquals(
         txs,

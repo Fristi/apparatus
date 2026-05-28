@@ -46,7 +46,7 @@ object Mermaid:
   private def render[Eff[_], I, O](apparatus: Apparatus[Eff, I, O], ctx: Context): (String, String) =
     apparatus.unfix match
 
-      case ApparatusF.AggregateMachine(aggregateType, _, _, _) =>
+      case ApparatusF.AggregateMachine(aggregateType, _) =>
         val id = ctx.fresh("node")
         ctx.node(id, aggregateType, Shape.Diamond)
         (id, id)
