@@ -46,10 +46,10 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       _ <- DoobieBankAccountTransactionRepository.create()
     yield ()
 
-  def runCommand(xa: Transactor[IO])(id: UUID, cmd: BankAccountCommand): IO[List[BankAccountEvent]] = {
+  def runCommand(xa: Transactor[IO])(cmd: BankAccountCommand): IO[List[BankAccountEvent]] = {
     val prg: Apparatus[ConnectionIO, BankAccountCommand, List[BankAccountEvent]] =
-      Apparatus.aggregateMachine("bank-account", bankAccount, _ => id)
-        .tap(transactionsProjection(id, DoobieBankAccountTransactionRepository))
+      Apparatus.aggregateMachine("bank-account", bankAccount, _.id)
+        .tap(transactionsProjection(DoobieBankAccountTransactionRepository))
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
 
     Apparatus.runA(prg, cmd, mat).transact(xa)
@@ -61,8 +61,8 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        events <- runCommand(xa)(id, BankAccountCommand.Open(now))
-      yield assertEquals(events, List(BankAccountEvent.Opened(now)))
+        events <- runCommand(xa)(BankAccountCommand.Open(id, now))
+      yield assertEquals(events, List(BankAccountEvent.Opened(id, now)))
     }
   }
 
@@ -72,8 +72,8 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        events <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(100), now))
-      yield assertEquals(events, List(BankAccountEvent.Rejected("invalid command for current state")))
+        events <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(100), now))
+      yield assertEquals(events, List(BankAccountEvent.Rejected(id, "invalid command for current state")))
     }
   }
 
@@ -83,9 +83,9 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        events <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(250), now))
-      yield assertEquals(events, List(BankAccountEvent.Deposited(BigDecimal(250), now)))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        events <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(250), now))
+      yield assertEquals(events, List(BankAccountEvent.Deposited(id, BigDecimal(250), now)))
     }
   }
 
@@ -95,10 +95,10 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        _ <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(500), now))
-        events <- runCommand(xa)(id, BankAccountCommand.Withdraw(BigDecimal(200), now))
-      yield assertEquals(events, List(BankAccountEvent.Withdrawn(BigDecimal(200), now)))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(500), now))
+        events <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(200), now))
+      yield assertEquals(events, List(BankAccountEvent.Withdrawn(id, BigDecimal(200), now)))
     }
   }
 
@@ -108,10 +108,10 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        _ <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(100), now))
-        events <- runCommand(xa)(id, BankAccountCommand.Withdraw(BigDecimal(999), now))
-      yield assertEquals(events, List(BankAccountEvent.Rejected("insufficient funds")))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(100), now))
+        events <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(999), now))
+      yield assertEquals(events, List(BankAccountEvent.Rejected(id, "insufficient funds")))
     }
   }
 
@@ -121,9 +121,9 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        events <- runCommand(xa)(id, BankAccountCommand.Close(now))
-      yield assertEquals(events, List(BankAccountEvent.ClosedAccount(now)))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        events <- runCommand(xa)(BankAccountCommand.Close(id, now))
+      yield assertEquals(events, List(BankAccountEvent.ClosedAccount(id, now)))
     }
   }
 
@@ -133,10 +133,10 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        _ <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(300), now))
-        events <- runCommand(xa)(id, BankAccountCommand.Withdraw(BigDecimal(300), now))
-      yield assertEquals(events, List(BankAccountEvent.Withdrawn(BigDecimal(300), now)))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(300), now))
+        events <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(300), now))
+      yield assertEquals(events, List(BankAccountEvent.Withdrawn(id, BigDecimal(300), now)))
     }
   }
 
@@ -146,10 +146,10 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        _ <- runCommand(xa)(id, BankAccountCommand.Close(now))
-        events <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(50), now))
-      yield assertEquals(events, List(BankAccountEvent.Rejected("invalid command for current state")))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        _ <- runCommand(xa)(BankAccountCommand.Close(id, now))
+        events <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(50), now))
+      yield assertEquals(events, List(BankAccountEvent.Rejected(id, "invalid command for current state")))
     }
   }
 
@@ -159,9 +159,9 @@ class BankAccountSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        _ <- runCommand(xa)(id, BankAccountCommand.Open(now))
-        _ <- runCommand(xa)(id, BankAccountCommand.Deposit(BigDecimal(500), now))
-        _ <- runCommand(xa)(id, BankAccountCommand.Withdraw(BigDecimal(200), now))
+        _ <- runCommand(xa)(BankAccountCommand.Open(id, now))
+        _ <- runCommand(xa)(BankAccountCommand.Deposit(id, BigDecimal(500), now))
+        _ <- runCommand(xa)(BankAccountCommand.Withdraw(id, BigDecimal(200), now))
         txs <- DoobieBankAccountTransactionRepository.listTransactions(id).transact(xa)
       yield assertEquals(
         txs,
