@@ -13,32 +13,38 @@ import zio.blocks.schema.Schema
 
 ## Building a machine
 
-Wrap a `Decider` with `Apparatus.deciderMachine` to get a stateful, effect-backed node:
+Wrap a `Decider` with `Apparatus.aggregateMachine` to get a stateful, effect-backed node.
+Each command must carry an `id: UUID` so the network can route to the correct per-aggregate `Ref`.
 
 ```scala mdoc
+import java.util.UUID
+
 enum DoorState { case Closed, Open }
-enum DoorCmd   { case Open, Close }
+sealed trait DoorCmd { val id: UUID }
+object DoorCmd:
+  case class Open(id: UUID)  extends DoorCmd
+  case class Close(id: UUID) extends DoorCmd
 enum DoorEvt derives Schema { case Opened, Closed }
 
 val door: Decider[DoorState, DoorCmd, List[DoorEvt]] =
   DeciderBuilder.seed(DoorState.Closed)
     .partiallyDecide[DoorCmd, DoorEvt]:
-      case (DoorState.Closed, DoorCmd.Open)  => List(DoorEvt.Opened)
-      case (DoorState.Open,   DoorCmd.Close) => List(DoorEvt.Closed)
+      case (DoorState.Closed, _: DoorCmd.Open)  => List(DoorEvt.Opened)
+      case (DoorState.Open,   _: DoorCmd.Close) => List(DoorEvt.Closed)
     .evolveList:
       case (DoorState.Closed, DoorEvt.Opened) => DoorState.Open
       case (DoorState.Open,   DoorEvt.Closed) => DoorState.Closed
       case (s, _)                              => s
 
 val doorFsm: Apparatus[SyncIO, DoorCmd, List[DoorEvt]] =
-  Apparatus.deciderMachine("door", door)
+  Apparatus.aggregateMachine("door", door, _.id)
 ```
 
 ## Constructors
 
 | Constructor | When to use |
 |-------------|-------------|
-| `Apparatus.deciderMachine(id, decider)` | Decider pattern — pure decide/evolve, Ref-backed state |
+| `Apparatus.aggregateMachine(id, decider, extractId)` | Decider pattern — pure decide/evolve, per-UUID Ref-backed state |
 | `Apparatus.closedMealy(m)` | Stateless or self-contained effectful machine |
 | `Apparatus.openMealy(m)` | Machine with explicit, closure-threaded state |
 
@@ -56,12 +62,13 @@ by the `DeciderMaterializer`.
 
 ```scala mdoc
 val mat = DeciderMaterializer.syncIO
+val doorId = UUID.fromString("00000000-0000-0000-0000-000000000001")
 
 // Single step
-val evts: List[DoorEvt] = Apparatus.run(doorFsm, DoorCmd.Open, mat).unsafeRunSync()
+val evts: List[DoorEvt] = Apparatus.run(doorFsm, DoorCmd.Open(doorId), mat).unsafeRunSync()
 
 // Multiple steps — combines outputs via Monoid
-val allEvts: List[DoorEvt] = Apparatus.runMultiple(doorFsm, List(DoorCmd.Open, DoorCmd.Close, DoorCmd.Open), mat).unsafeRunSync()
+val allEvts: List[DoorEvt] = Apparatus.runMultiple(doorFsm, List(DoorCmd.Open(doorId), DoorCmd.Close(doorId), DoorCmd.Open(doorId)), mat).unsafeRunSync()
 ```
 
 `runSteps` returns each step's output in a `List` rather than combining them.
@@ -132,7 +139,7 @@ instances (typically `List`).
 // Contrived example: bounce door commands back-and-forth
 val echo: Apparatus[SyncIO, DoorEvt, List[DoorCmd]] =
   Apparatus.closedMealy(ClosedMealy.stateless[SyncIO, DoorEvt, List[DoorCmd]] {
-    case DoorEvt.Opened => SyncIO.pure(List(DoorCmd.Close))
+    case DoorEvt.Opened => SyncIO.pure(List(DoorCmd.Close(doorId)))
     case DoorEvt.Closed => SyncIO.pure(Nil)
   })
 
@@ -148,7 +155,7 @@ machine's state is **not advanced** and `Monoid.empty` is returned for the outpu
 ```scala mdoc:silent
 // Only feed Open commands to doorFsm; ignore everything else
 val openOnly: Apparatus[SyncIO, Option[DoorCmd], List[DoorEvt]] =
-  doorFsm.lmapOrEmpty { case Some(DoorCmd.Open) => DoorCmd.Open }
+  doorFsm.lmapOrEmpty { case Some(cmd: DoorCmd.Open) => cmd }
 ```
 
 This combinator is especially useful when multiple service machines share the same input stream
