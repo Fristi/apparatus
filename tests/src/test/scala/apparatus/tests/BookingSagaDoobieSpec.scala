@@ -56,7 +56,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
       for
         _ <- createSchema.transact(xa)
         id = UUID.randomUUID()
-        events <- runCommand(xa)(id, BookingCommand.Start)
+        events <- runCommand(xa)(id, BookingCommand.Start(bookingId))
       yield assertEquals(events, List(
         SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
         SagaEvent.StepStarted(BookingStep.Hotel),
