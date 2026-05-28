@@ -17,45 +17,45 @@ class CartSpec extends munit.FunSuite:
   // ── Pure decider tests ────────────────────────────────────────────────────
 
   test("PayCart from WaitingForPayment emits CartPaymentInitiated"):
-    val evts = cartDecider.decide(CartCommand.PayCart, CartState.WaitingForPayment)
-    assertEquals(evts, List(CartEvent.CartPaymentInitiated))
+    val evts = cartDecider.decide(CartCommand.PayCart(cartId), CartState.WaitingForPayment)
+    assertEquals(evts, List(CartEvent.CartPaymentInitiated(cartId)))
 
   test("MarkCartAsPaid from WaitingForPayment emits nothing"):
-    val evts = cartDecider.decide(CartCommand.MarkCartAsPaid, CartState.WaitingForPayment)
+    val evts = cartDecider.decide(CartCommand.MarkCartAsPaid(cartId), CartState.WaitingForPayment)
     assertEquals(evts, Nil)
 
   test("MarkCartAsPaid from InitiatingPayment emits CartPaymentCompleted"):
-    val evts = cartDecider.decide(CartCommand.MarkCartAsPaid, CartState.InitiatingPayment)
-    assertEquals(evts, List(CartEvent.CartPaymentCompleted))
+    val evts = cartDecider.decide(CartCommand.MarkCartAsPaid(cartId), CartState.InitiatingPayment)
+    assertEquals(evts, List(CartEvent.CartPaymentCompleted(cartId)))
 
   test("PayCart from InitiatingPayment emits nothing (already in-flight)"):
-    val evts = cartDecider.decide(CartCommand.PayCart, CartState.InitiatingPayment)
+    val evts = cartDecider.decide(CartCommand.PayCart(cartId), CartState.InitiatingPayment)
     assertEquals(evts, Nil)
 
   test("any command from PaymentComplete emits nothing"):
-    assertEquals(cartDecider.decide(CartCommand.PayCart,         CartState.PaymentComplete), Nil)
-    assertEquals(cartDecider.decide(CartCommand.MarkCartAsPaid,  CartState.PaymentComplete), Nil)
+    assertEquals(cartDecider.decide(CartCommand.PayCart(cartId),        CartState.PaymentComplete), Nil)
+    assertEquals(cartDecider.decide(CartCommand.MarkCartAsPaid(cartId), CartState.PaymentComplete), Nil)
 
   test("evolve: CartPaymentInitiated advances to InitiatingPayment"):
-    val next = CartState.WaitingForPayment.evolve(CartEvent.CartPaymentInitiated)
+    val next = CartState.WaitingForPayment.evolve(CartEvent.CartPaymentInitiated(cartId))
     assertEquals(next, CartState.InitiatingPayment)
 
   test("evolve: CartPaymentCompleted advances to PaymentComplete"):
-    val next = CartState.InitiatingPayment.evolve(CartEvent.CartPaymentCompleted)
+    val next = CartState.InitiatingPayment.evolve(CartEvent.CartPaymentCompleted(cartId))
     assertEquals(next, CartState.PaymentComplete)
 
   // ── Shipping decider tests ────────────────────────────────────────────────
 
   test("StartShipping from Idle emits ShippingStarted"):
-    val evts = shippingDecider.decide(ShippingCommand.StartShipping, ShippingState.Idle)
-    assertEquals(evts, List(ShippingEvent.ShippingStarted))
+    val evts = shippingDecider.decide(ShippingCommand.StartShipping(shippingId), ShippingState.Idle)
+    assertEquals(evts, List(ShippingEvent.ShippingStarted(shippingId)))
 
   test("StartShipping from Shipping emits nothing (already shipping)"):
-    val evts = shippingDecider.decide(ShippingCommand.StartShipping, ShippingState.Shipping)
+    val evts = shippingDecider.decide(ShippingCommand.StartShipping(shippingId), ShippingState.Shipping)
     assertEquals(evts, Nil)
 
   test("evolve: ShippingStarted advances Idle to Shipping"):
-    val next = ShippingState.Idle.evolve(ShippingEvent.ShippingStarted)
+    val next = ShippingState.Idle.evolve(ShippingEvent.ShippingStarted(shippingId))
     assertEquals(next, ShippingState.Shipping)
 
   // ── Apparatus network tests ───────────────────────────────────────────────
@@ -71,25 +71,25 @@ class CartSpec extends munit.FunSuite:
 
   test("writeModel: PayCart triggers payment gateway and emits both events"):
     // feedback loop: PayCart → CartPaymentInitiated → gateway → MarkCartAsPaid → CartPaymentCompleted
-    val result = runSteps(writeModel[SyncIO](cartId), CartCommand.PayCart)
-    assertEquals(result.flatten, List(CartEvent.CartPaymentInitiated, CartEvent.CartPaymentCompleted))
+    val result = runSteps(writeModel[SyncIO], CartCommand.PayCart(cartId))
+    assertEquals(result.flatten, List(CartEvent.CartPaymentInitiated(cartId), CartEvent.CartPaymentCompleted(cartId)))
 
   test("writeModel: duplicate PayCart after completion emits nothing"):
-    val results = runSteps(writeModel[SyncIO](cartId),
-      CartCommand.PayCart,
-      CartCommand.PayCart // cart is in PaymentComplete state, ignored
+    val results = runSteps(writeModel[SyncIO],
+      CartCommand.PayCart(cartId),
+      CartCommand.PayCart(cartId) // cart is in PaymentComplete state, ignored
     )
     // second PayCart: state is PaymentComplete, decide returns Nil
     assertEquals(results.last, Nil)
 
   test("cartApplication: PayCart produces Initiated then Completed views"):
-    val result = runSteps(cartApplication[SyncIO](cartId), CartCommand.PayCart)
+    val result = runSteps(cartApplication[SyncIO], CartCommand.PayCart(cartId))
     assertEquals(result.flatten, List(CartView.Initiated, CartView.Completed))
 
   test("cartApplication: two PayCart commands — second produces no views"):
-    val results = runSteps(cartApplication[SyncIO](cartId),
-      CartCommand.PayCart,
-      CartCommand.PayCart
+    val results = runSteps(cartApplication[SyncIO],
+      CartCommand.PayCart(cartId),
+      CartCommand.PayCart(cartId)
     )
     assertEquals(results.head.toSet, Set(CartView.Initiated, CartView.Completed))
     assertEquals(results.last, Nil)
@@ -97,8 +97,8 @@ class CartSpec extends munit.FunSuite:
   // ── Full cart + shipping pipeline tests ───────────────────────────────────
 
   test("cartAndShipping: PayCart triggers shipping on payment complete"):
-    val results = runStepsEither(cartAndShipping[SyncIO](cartId, shippingId),
-      Left(CartCommand.PayCart)
+    val results = runStepsEither(cartAndShipping[SyncIO](shippingId),
+      Left(CartCommand.PayCart(cartId))
     )
     val views = results.flatten
     assert(views.contains(Left(CartView.Initiated)),  "should contain Initiated")
@@ -106,23 +106,23 @@ class CartSpec extends munit.FunSuite:
     assert(views.contains(Right(ShippingInfo.Started)), "should start shipping on payment")
 
   test("cartAndShipping: StartShipping directly produces Started info"):
-    val results = runStepsEither(cartAndShipping[SyncIO](cartId, shippingId),
-      Right(ShippingCommand.StartShipping)
+    val results = runStepsEither(cartAndShipping[SyncIO](shippingId),
+      Right(ShippingCommand.StartShipping(shippingId))
     )
     assertEquals(results.flatten, List(Right(ShippingInfo.Started)))
 
   test("cartAndShipping: second StartShipping is idempotent (already shipping)"):
-    val results = runStepsEither(cartAndShipping[SyncIO](cartId, shippingId),
-      Right(ShippingCommand.StartShipping),
-      Right(ShippingCommand.StartShipping)
+    val results = runStepsEither(cartAndShipping[SyncIO](shippingId),
+      Right(ShippingCommand.StartShipping(shippingId)),
+      Right(ShippingCommand.StartShipping(shippingId))
     )
     assertEquals(results.last, Nil)
 
   test("writeModelWithShipping: PayCart emits cart + shipping events"):
-    val results = runStepsEither(writeModelWithShipping[SyncIO](cartId, shippingId),
-      Left(CartCommand.PayCart)
+    val results = runStepsEither(writeModelWithShipping[SyncIO](shippingId),
+      Left(CartCommand.PayCart(cartId))
     )
     val evts = results.flatten
-    assert(evts.contains(Left(CartEvent.CartPaymentInitiated)))
-    assert(evts.contains(Left(CartEvent.CartPaymentCompleted)))
-    assert(evts.contains(Right(ShippingEvent.ShippingStarted)))
+    assert(evts.contains(Left(CartEvent.CartPaymentInitiated(cartId))))
+    assert(evts.contains(Left(CartEvent.CartPaymentCompleted(cartId))))
+    assert(evts.contains(Right(ShippingEvent.ShippingStarted(shippingId))))
