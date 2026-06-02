@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:15.1
+    environment:
+      POSTGRES_DB: apparatus
+      POSTGRES_USER: apparatus
+      POSTGRES_PASSWORD: apparatus
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apparatus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

@@ -76,17 +76,17 @@ val behavior: SagaBehavior[BookingCommand, BookingStep] = SagaBehaviorFactory(
 ## SagaAdvancePrism
 
 A `SagaAdvancePrism[Cmd, Stp]` is a bidirectional optic between the saga's command type and
-the triple `(step, phase, result)`:
+the quadruple `(correlationId, step, phase, result)`:
 
 ```scala mdoc:silent
 val advancePrism: SagaAdvancePrism[BookingCommand, BookingStep] =
-  new Prism[BookingCommand, (BookingStep, SagaPhase, SagaStepResult)] {
+  new Prism[BookingCommand, (java.util.UUID, BookingStep, SagaPhase, SagaStepResult)] {
     def getOption(cmd: BookingCommand) = cmd match {
-      case BookingCommand.Advance(_, step, phase, result) => Some((step, phase, result))
-      case _                                              => None
+      case BookingCommand.Advance(id, step, phase, result) => Some((id, step, phase, result))
+      case _                                               => None
     }
-    def reverseGet(t: (BookingStep, SagaPhase, SagaStepResult)) =
-      BookingCommand.Advance(bookingId, t._1, t._2, t._3)
+    def reverseGet(t: (java.util.UUID, BookingStep, SagaPhase, SagaStepResult)) =
+      BookingCommand.Advance(t._1, t._2, t._3, t._4)
   }
 ```
 
@@ -100,16 +100,17 @@ Each service participating in the saga needs two wiring operations:
 1. **Input side** (`lmapOrEmpty`): filter the orchestrator's `SagaEvent` stream to only the
    events relevant to this step, and map them to the service's command type.
 2. **Output side** (`rmap`): translate the service's domain events into saga acknowledgement
-   commands using `classify` and the prism.
+   commands using `classify`, `correlationId`, and the prism.
 
 `SagaStepAdapter` encapsulates both:
 
 ```scala
 trait SagaStepAdapter[Cmd, Evt, Stp]:
-  def step:       Stp                                           // which saga step this adapter represents
-  def start:      Cmd                                           // command sent on StepStarted
-  def compensate: Cmd                                           // command sent on CompensationStarted
-  def classify(event: Evt): Option[(SagaPhase, SagaStepResult)] // interpret domain events as saga signals
+  def step:            Stp                                           // which saga step this adapter represents
+  def start:           Cmd                                           // command sent on StepStarted
+  def compensate:      Cmd                                           // command sent on CompensationStarted
+  def classify(event: Evt): Option[(SagaPhase, SagaStepResult)]      // interpret domain events as saga signals
+  // correlationId(event) defaults to event.correlationId when Evt <: SagaCorrelated
 ```
 
 ### lmapOrEmpty — input side
@@ -132,14 +133,13 @@ its own path and falls through otherwise.
 ### rmap — output side
 
 `SagaStepAdapter.rmap(apparatus, prism)` wraps the service machine's `List[Evt]` output,
-calling `classify` on each event and encoding matching ones via the prism:
+calling `classify` and `correlationId` on each event and encoding matching ones via the prism:
 
 ```
-FlightEvent.Reserved(_)           → Some(Forward, Completed)  → BookingCommand.Advance(_, Flight, Forward, Completed)
-FlightEvent.Failed(_)             → Some(Forward, Failed)     → BookingCommand.Advance(_, Flight, Forward, Failed)
-FlightEvent.Compensated(_)        → Some(Compensation, Completed)
-FlightEvent.CompensationFailed(_) → Some(Compensation, Failed)
-other events                      → None                       → dropped
+FlightEvent.Reserved(_, bookingId)  → Some(Forward, Completed)  → Advance(bookingId, Flight, Forward, Completed)
+FlightEvent.Failed(_, bookingId)    → Some(Forward, Failed)     → Advance(bookingId, Flight, Forward, Failed)
+FlightEvent.Compensated(_, bookingId) → Some(Compensation, Completed)
+other events                        → None                       → dropped
 ```
 
 ### Full service adapter example

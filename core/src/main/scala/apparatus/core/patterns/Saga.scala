@@ -3,10 +3,12 @@ package apparatus.core.patterns
 import apparatus.core.*
 import apparatus.core.machines.{Decider, DeciderBuilder, evolveList}
 import cats.*
+import cats.data.NonEmptyList
 import cats.data.NonEmptySet
 import cats.implicits.*
 import zio.blocks.schema.Schema
 
+import java.util.UUID
 import scala.collection.immutable.SortedSet
 
 /** Distinguishes which direction a saga is currently running.
@@ -23,6 +25,14 @@ enum SagaPhase {
   case Forward
   case Compensation
 }
+
+/** Generates command ids for saga step dispatches. */
+trait SagaStepCorrelationIdGenerator[-Step]:
+  def next(step: Step): UUID
+
+object SagaStepCorrelationIdGenerator:
+  def random[Step]: SagaStepCorrelationIdGenerator[Step] = new SagaStepCorrelationIdGenerator[Step]:
+    override def next(step: Step): UUID = UUID.randomUUID()
 
 /** Bidirectional optic between a saga command type `S` and a focus type `A`.
   *
@@ -48,13 +58,14 @@ trait Prism[S, A] {
 
 /** A [[Prism]] specialised for advancing a saga.
   *
-  * Maps between a saga's command type `Cmd` and the triple
-  * `(step, phase, result)` that describes a single acknowledgement from an
+  * Maps between a saga's command type `Cmd` and the quadruple
+  * `(correlationId, step, phase, result)` that describes a single acknowledgement from an
   * external service:
   *
-  *   - `step`   — which saga step is being acknowledged (e.g. `BookingStep.Car`)
-  *   - `phase`  — [[SagaPhase.Forward]] or [[SagaPhase.Compensation]]
-  *   - `result` — [[SagaStepResult.Completed]] or [[SagaStepResult.Failed]]
+  *   - `correlationId` — saga instance id (e.g. booking id propagated from `InitSearch`)
+  *   - `step`          — which saga step is being acknowledged (e.g. `BookingStep.Car`)
+  *   - `phase`         — [[SagaPhase.Forward]] or [[SagaPhase.Compensation]]
+  *   - `result`        — [[SagaStepResult.Completed]] or [[SagaStepResult.Failed]]
   *
   * Implement once per saga command type and pass it to [[SagaBehaviorFactory]]
   * and to every [[SagaStepAdapter.rmap]] call so the saga orchestrator and the
@@ -63,20 +74,24 @@ trait Prism[S, A] {
   * Example (from the booking saga):
   * {{{
   * val advancePrism: SagaAdvancePrism[BookingCommand, BookingStep] =
-  *   new Prism[BookingCommand, (BookingStep, SagaPhase, SagaStepResult)] {
+  *   new Prism[BookingCommand, (UUID, BookingStep, SagaPhase, SagaStepResult)] {
   *     def getOption(cmd: BookingCommand) = cmd match {
-  *       case BookingCommand.Advance(step, phase, result) => Some((step, phase, result))
+  *       case BookingCommand.Advance(id, step, phase, result) => Some((id, step, phase, result))
   *       case _ => None
   *     }
-  *     def reverseGet(t: (BookingStep, SagaPhase, SagaStepResult)) =
-  *       BookingCommand.Advance(t._1, t._2, t._3)
+  *     def reverseGet(t: (UUID, BookingStep, SagaPhase, SagaStepResult)) =
+  *       BookingCommand.Advance(t._1, t._2, t._3, t._4)
   *   }
   * }}}
   *
   * @tparam Cmd the command type of the saga (e.g. `BookingCommand`)
   * @tparam Stp the step type of the saga (e.g. `BookingStep`)
   */
-type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (Stp, SagaPhase, SagaStepResult)]
+type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (UUID, Stp, SagaPhase, SagaStepResult)]
+
+/** Service domain events that embed the saga instance correlation id. */
+trait SagaCorrelated:
+  def correlationId: UUID
 
 /** Bridges a single external service into the saga orchestration machinery.
   *
@@ -118,16 +133,19 @@ type SagaAdvancePrism[Cmd, Stp] = Prism[Cmd, (Stp, SagaPhase, SagaStepResult)]
   * @tparam Evt the event type of the external service (e.g. `CarEvent`)
   * @tparam Stp the step type shared with the saga orchestrator (e.g. `BookingStep`)
   */
-trait SagaStepAdapter[Cmd, Evt, Stp] {
+trait SagaStepAdapter[Cmd, Evt <: SagaCorrelated, SagaStep, SagaData] {
 
   /** The saga step this adapter represents. Used to filter incoming [[SagaEvent]]s. */
-  def step: Stp
+  def step: SagaStep
 
-  /** Command sent to the external service to begin the forward step. */
-  def start: Cmd
+  /** Command sent to the external service to begin the forward step.
+    *
+    * `sagaState` and `correlationId` come from [[SagaEvent.StepStarted]].
+    */
+  def start(id: UUID, sagaState: SagaData, correlationId: UUID): Cmd
 
   /** Command sent to the external service to roll back the forward step. */
-  def compensate: Cmd
+  def compensate(id: UUID): Cmd
 
   /** Interprets a domain event from the external service as a saga signal.
     *
@@ -138,6 +156,9 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
     * @return `Some` with the phase and result, or `None` to ignore the event
     */
   def classify(event: Evt): Option[(SagaPhase, SagaStepResult)]
+
+  /** Saga correlation id embedded in service events (e.g. `bookingId` on [[SagaCorrelated]] events). */
+  final def correlationId(event: Evt): UUID = event.correlationId
 
   /** Translates saga orchestration events into service commands (input side).
     *
@@ -151,18 +172,19 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
     * @param apparatus the raw service machine keyed on `Cmd`
     * @return a machine keyed on `SagaEvent[Stp]`, silent for unrelated events
     */
-  final def lmapOrEmpty[F[_], O : Monoid](apparatus: Apparatus[F, Cmd, O]): Apparatus[F, SagaEvent[Stp], O] =
+  final def lmapOrEmpty[F[_], O : Monoid](apparatus: Apparatus[F, Cmd, O]): Apparatus[F, SagaEvent[SagaStep, SagaData], O] =
       apparatus
-        .lmapOrEmpty[SagaEvent[Stp]] {
-          case SagaEvent.StepStarted(s) if s == step => start
-          case SagaEvent.CompensationStarted(s) if s == step => compensate
+        .lmapOrEmpty[SagaEvent[SagaStep, SagaData]] {
+          case SagaEvent.StepStarted(corrId, sagaState, s, id) if s == step =>
+            start(id, sagaState, corrId)
+          case SagaEvent.CompensationStarted(_, s, id) if s == step => compensate(id)
         }
         .label(s"${step} event router")
 
   /** Translates service domain events into saga advance commands (output side).
     *
     * Wraps a service [[Apparatus]] so its `List[Evt]` output is mapped to
-    * `List[SagaCmd]` using [[classify]] and the provided [[SagaAdvancePrism]].
+    * `List[SagaCmd]` using [[classify]], [[correlationId]], and the provided [[SagaAdvancePrism]].
     * Events for which [[classify]] returns `None` are silently dropped.
     *
     * Pair with [[lmapOrEmpty]] to get a fully adapted service machine:
@@ -174,15 +196,24 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
     * @param prism     the saga's advance prism used to construct saga commands
     * @return a machine with the same input type but output `List[SagaCmd]`
     */
-  final def rmap[F[_] : Applicative, I, SagaCmd](apparatus: Apparatus[F, I, List[Evt]], prism: SagaAdvancePrism[SagaCmd, Stp]): Apparatus[F, I, List[SagaCmd]] =
-    apparatus.rmap(evs => evs.flatMap((ev: Evt) => classify(ev).map((phase, result) => prism.reverseGet(step, phase, result))))
+  final def rmap[F[_]: Applicative, I, SagaCmd](
+    apparatus: Apparatus[F, I, List[Evt]],
+    prism:     SagaAdvancePrism[SagaCmd, SagaStep]
+  ): Apparatus[F, I, List[SagaCmd]] =
+    apparatus.rmap(evs =>
+      evs.flatMap { ev =>
+        classify(ev).map { (phase, result) =>
+          prism.reverseGet((correlationId(ev), step, phase, result))
+        }
+      }
+    )
 }
 
 /** Convenience constructor for [[SagaBehavior]] that derives [[stepHandler]] and
   * [[compensationHandler]] from a [[SagaAdvancePrism]].
   *
   * Use this instead of manually implementing the trait when a prism already encodes the
-  * command ↔ `(step, phase, result)` mapping.
+  * command ↔ `(correlationId, step, phase, result)` mapping.
   *
   * @param name         aggregate name for the saga decider
   * @param startCommand command that boots the saga from [[SagaState.Waiting]]
@@ -191,11 +222,26 @@ trait SagaStepAdapter[Cmd, Evt, Stp] {
   * @tparam Cmd command type
   * @tparam Stp step type; must have `Eq`, `Order`, and `Show` instances
   */
-case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](name: String, startCommand: Cmd, prism: SagaAdvancePrism[Cmd, Stp], steps: NonEmptySet[Stp]) extends SagaBehavior[Cmd, Stp] {
-    override val stepHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
-      Function.unlift(cmd => prism.getOption(cmd).filter((_, phase, _) => phase == SagaPhase.Forward).map((stp, _, result) => (stp, result)))
-    override val compensationHandler: PartialFunction[Cmd, (Stp, SagaStepResult)] =
-      Function.unlift(cmd => prism.getOption(cmd).filter((_, phase, _) => phase == SagaPhase.Compensation).map((stp, _, result) => (stp, result)))
+case class SagaBehaviorFactory[Cmd, SagaStep : {Eq, Order, Show}, SagaData](
+  name: String,
+  startCommandClass: Class[? <: Cmd],
+  compensateCommandClass: Class[? <: Cmd],
+  sagaIdExtractor: Cmd => UUID,
+  sagaStateExtractor: PartialFunction[Cmd, SagaData],
+  prism: SagaAdvancePrism[Cmd, SagaStep],
+  steps: NonEmptySet[SagaStep],
+  uuidGen: SagaStepCorrelationIdGenerator[SagaStep] = SagaStepCorrelationIdGenerator.random
+) extends SagaBehavior[Cmd, SagaStep, SagaData] {
+    override def commandSagaId(cmd: Cmd): UUID = sagaIdExtractor(cmd)
+    override def commandSagaState: PartialFunction[Cmd, SagaData] = sagaStateExtractor
+    override val stepHandler: PartialFunction[Cmd, (SagaStep, SagaStepResult)] =
+      Function.unlift(cmd =>
+        prism.getOption(cmd).filter((_, _, phase, _) => phase == SagaPhase.Forward).map((_, stp, _, result) => (stp, result))
+      )
+    override val compensationHandler: PartialFunction[Cmd, (SagaStep, SagaStepResult)] =
+      Function.unlift(cmd =>
+        prism.getOption(cmd).filter((_, _, phase, _) => phase == SagaPhase.Compensation).map((_, stp, _, result) => (stp, result))
+      )
 }
 
 /** Lifecycle state of a saga.
@@ -213,24 +259,30 @@ case class SagaBehaviorFactory[Cmd, Stp : {Eq, Order, Show}](name: String, start
   *
   * @tparam Step the step type, which must have `Order`, `Eq`, and `Show` instances
   */
-sealed trait SagaState[Step]
+sealed trait SagaState[SagaStep, +SagaData]
 
 object SagaState {
 
+  /** Persisted dispatch target for a saga step command. */
+  final case class StepDispatch[SagaStep](name: SagaStep, id: UUID)
+
+  object StepDispatch:
+    given [SagaStep: Schema]: Schema[StepDispatch[SagaStep]] = Schema.derived
+
   /** Initial state. The saga has not been started yet. */
-  case class Waiting[Step]() extends SagaState[Step]
+  case class Waiting[SagaStep, SagaData]() extends SagaState[SagaStep, SagaData]
 
   /** Steps have been scheduled; awaiting dispatch of the first [[SagaEvent.StepStarted]]. */
-  case class Prepared[Step](steps: NonEmptySet[Step]) extends SagaState[Step]
+  case class Prepared[SagaStep, SagaData](sagaData: SagaData, steps: NonEmptyList[StepDispatch[SagaStep]]) extends SagaState[SagaStep, SagaData]
 
   /** All forward steps completed successfully. */
-  case class Succeeded[Step]() extends SagaState[Step]
+  case class Succeeded[SagaStep, SagaData](sagaData: SagaData, steps: NonEmptyList[StepDispatch[SagaStep]]) extends SagaState[SagaStep, SagaData]
 
   /** Compensation steps scheduled; awaiting dispatch of the first [[SagaEvent.CompensationStarted]]. */
-  case class CompensationPrepared[Step](steps: NonEmptySet[Step]) extends SagaState[Step]
+  case class CompensationPrepared[SagaStep, SagaData](steps: NonEmptyList[StepDispatch[SagaStep]]) extends SagaState[SagaStep, SagaData]
 
   /** Compensation finished (regardless of individual step outcomes). */
-  case class Failed[Step]() extends SagaState[Step]
+  case class Failed[SagaStep, SagaData]() extends SagaState[SagaStep, SagaData]
 
   /** A forward run is in progress.
     *
@@ -238,14 +290,20 @@ object SagaState {
     * @param todo        remaining steps to execute in order
     * @param compensation steps that have completed and must be compensated if a later step fails
     */
-  case class Running[Step](current: Step, todo: SortedSet[Step], compensation: SortedSet[Step]) extends SagaState[Step]
+  case class Running[SagaStep, SagaData](
+    sagaData: SagaData,
+    current: StepDispatch[SagaStep],
+    todo: List[StepDispatch[SagaStep]],
+    compensation: SortedSet[SagaStep],
+    steps: NonEmptyList[StepDispatch[SagaStep]]
+  ) extends SagaState[SagaStep, SagaData]
 
   /** Compensation is in progress after a forward step failed.
     *
     * @param current the compensation step currently executing
     * @param todo    remaining compensation steps to execute in order
     */
-  case class Compensating[Step](current: Step, todo: SortedSet[Step]) extends SagaState[Step]
+  case class Compensating[SagaStep, SagaData](current: StepDispatch[SagaStep], todo: List[StepDispatch[SagaStep]]) extends SagaState[SagaStep, SagaData]
 }
 
 /** Outcome reported by an external service for a single saga step or compensation step. */
@@ -258,43 +316,53 @@ enum SagaStepResult derives Schema { case Completed, Failed }
   *
   * @tparam Step the step type
   */
-sealed trait SagaEvent[Step]
+sealed trait SagaEvent[+SagaStep, +SagaData]
 
 object SagaEvent:
 
   /** The saga was started. `steps` is the full ordered set of forward steps to execute. */
-  final case class Booted[Step](
-                                 steps: NonEmptySet[Step]
-                               ) extends SagaEvent[Step]
+  final case class Booted[SagaStep, SagaData](
+    correlationId: UUID,
+    sagaState: SagaData,
+    steps: NonEmptyList[apparatus.core.patterns.SagaState.StepDispatch[SagaStep]]
+  ) extends SagaEvent[SagaStep, SagaData]
 
   /** A forward step has been dispatched to the external service. */
-  final case class StepStarted[Step](
-                                      name: Step
-                                    ) extends SagaEvent[Step]
+  final case class StepStarted[SagaStep, SagaData](
+    correlationId: UUID,
+    sagaState: SagaData,
+    name: SagaStep,
+    id: UUID
+  ) extends SagaEvent[SagaStep, SagaData]
 
   /** An external service reported the result of a forward step. */
-  final case class StepProgressed[Step](
-                                         name: Step,
-                                         result: SagaStepResult
-                                       ) extends SagaEvent[Step]
+  final case class StepProgressed[SagaStep](
+    correlationId: UUID,
+    name: SagaStep,
+    result: SagaStepResult
+  ) extends SagaEvent[SagaStep, Nothing]
 
   /** A forward step failed; compensation will proceed through `steps` in order. */
-  final case class CompensationTriggered[Step](
-                                                steps: NonEmptySet[Step]
-                                              ) extends SagaEvent[Step]
+  final case class CompensationTriggered[SagaStep](
+    correlationId: UUID,
+    steps: NonEmptyList[apparatus.core.patterns.SagaState.StepDispatch[SagaStep]]
+  ) extends SagaEvent[SagaStep, Nothing]
 
   /** A compensation step has been dispatched to the external service. */
-  final case class CompensationStarted[Step](
-                                              name: Step
-                                            ) extends SagaEvent[Step]
+  final case class CompensationStarted[SagaStep](
+    correlationId: UUID,
+    name: SagaStep,
+    id: UUID
+  ) extends SagaEvent[SagaStep, Nothing]
 
   /** An external service reported the result of a compensation step. */
-  final case class CompensationProgressed[Step](
-                                                 name: Step,
-                                                 result: SagaStepResult
-                                               ) extends SagaEvent[Step]
+  final case class CompensationProgressed[SagaStep](
+    correlationId: UUID,
+    name: SagaStep,
+    result: SagaStepResult
+  ) extends SagaEvent[SagaStep, Nothing]
 
-  given [Step: {Schema, Order}]: Schema[SagaEvent[Step]] =
+  given [SagaStep: {Schema, Order}, SagaData: Schema]: Schema[SagaEvent[SagaStep, SagaData]] =
     Schema.derived
 
 /** Defines the domain-specific shape of a saga.
@@ -319,15 +387,27 @@ object SagaEvent:
   * @tparam Step the step type; must have `Order`, `Eq`, and `Show` instances so steps can be
   *              stored in a `SortedSet` and compared safely
   */
-trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
+trait SagaBehavior[Cmd, SagaStep : {Order, Eq, Show}, SagaData]:
   /** Aggregate name used as the [[Decider]] name and for logging / Mermaid diagrams. */
   def name: String
 
   /** The command that transitions [[SagaState.Waiting]] → [[SagaState.Running]]. */
-  def startCommand: Cmd
+  def startCommandClass: Class[? <: Cmd]
+
+  /** Command that asks the saga to enter compensation mode. */
+  def compensateCommandClass: Class[? <: Cmd]
+
+  /** Extracts saga/aggregate correlation id from any command consumed by the saga. */
+  def commandSagaId(cmd: Cmd): UUID
+
+  /** Extracts the boot state from the start command. */
+  def commandSagaState: PartialFunction[Cmd, SagaData]
 
   /** Ordered set of forward steps. The saga executes them head-to-tail. */
-  def steps: NonEmptySet[Step]
+  def steps: NonEmptySet[SagaStep]
+
+  /** UUID generator used when dispatching step and compensation commands. */
+  def uuidGen: SagaStepCorrelationIdGenerator[SagaStep]
 
   /** Translates an incoming command to a `(step, result)` pair during compensation.
     *
@@ -336,7 +416,7 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     * The partial function should be defined for every command that an external service can
     * send as a compensation acknowledgement — it is silently ignored when undefined.
     */
-  def compensationHandler: PartialFunction[Cmd, (Step, SagaStepResult)]
+  def compensationHandler: PartialFunction[Cmd, (SagaStep, SagaStepResult)]
 
   /** Translates an incoming command to a `(step, result)` pair during the forward run.
     *
@@ -345,7 +425,7 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     * The partial function should be defined for every command that an external service can
     * send as a forward-step acknowledgement — it is silently ignored when undefined.
     */
-  def stepHandler: PartialFunction[Cmd, (Step, SagaStepResult)]
+  def stepHandler: PartialFunction[Cmd, (SagaStep, SagaStepResult)]
 
   /** Pure decision function: maps `(state, command)` → list of [[SagaEvent]]s.
     *
@@ -356,46 +436,67 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     *   - `Compensating`        — delegates to [[compensationHandler]]; advances through compensation steps
     *   - `Prepared` / `CompensationPrepared` / `Succeeded` / `Failed` — always emits `Nil`
     */
-  final def decide(state: SagaState[Step], cmd: Cmd): List[SagaEvent[Step]] = state match {
+  final def decide(state: apparatus.core.patterns.SagaState[SagaStep, SagaData], cmd: Cmd): List[SagaEvent[SagaStep, SagaData]] = state match {
     case SagaState.Waiting() =>
-      if(cmd == startCommand) List(SagaEvent.Booted(steps), SagaEvent.StepStarted(steps.head)) else Nil
-    case SagaState.Running(current, todo, compensation) =>
-      stepHandler.unapply(cmd) match {
-        case Some((stepName, result)) =>
-          result match {
-            case SagaStepResult.Completed =>
-              if(current === stepName) {
-                List(SagaEvent.StepProgressed(stepName, result)) ++ todo.headOption.map(SagaEvent.StepStarted(_))
-              } else {
-                Nil
-              }
-            case SagaStepResult.Failed =>
-              if(current === stepName) {
-                val progressEvent: List[SagaEvent[Step]] = List(SagaEvent.StepProgressed(stepName, result))
-                val compEvents: List[SagaEvent[Step]] = NonEmptySet.fromSet(compensation).toList.flatMap { cs =>
-                  List(SagaEvent.CompensationTriggered(cs), SagaEvent.CompensationStarted(cs.head))
+      if startCommandClass.isInstance(cmd) && commandSagaState.isDefinedAt(cmd) then
+        val correlationId = commandSagaId(cmd)
+        val sagaState = commandSagaState(cmd)
+        val dispatches = NonEmptyList.fromListUnsafe(steps.toSortedSet.toList.map(step => SagaState.StepDispatch(step, uuidGen.next(step))))
+        List(
+          SagaEvent.Booted(correlationId, sagaState, dispatches),
+          SagaEvent.StepStarted(correlationId, sagaState, dispatches.head.name, dispatches.head.id)
+        )
+      else Nil
+    case SagaState.Running(sagaData, current, todo, compensation, steps) =>
+      val correlationId = commandSagaId(cmd)
+      if compensateCommandClass.isInstance(cmd) then
+        NonEmptyList.fromList(steps.toList.filter(dispatch => compensation.contains(dispatch.name))).toList.flatMap { dispatches =>
+          List(
+            SagaEvent.CompensationTriggered(correlationId, dispatches),
+            SagaEvent.CompensationStarted(correlationId, dispatches.head.name, dispatches.head.id)
+          )
+        }
+      else
+        stepHandler.unapply(cmd) match {
+          case Some((stepName, result)) =>
+            result match {
+              case SagaStepResult.Completed =>
+                if(current.name === stepName) {
+                  List(SagaEvent.StepProgressed(correlationId, stepName, result)) ++ todo.headOption.map(next => SagaEvent.StepStarted(correlationId, sagaData, next.name, next.id))
+                } else {
+                  Nil
                 }
-                progressEvent ++ compEvents
-              } else {
-                Nil
-              }
-          }
-        case None => Nil
-      }
+              case SagaStepResult.Failed =>
+                if(current.name === stepName) {
+                  val progressEvent: List[SagaEvent[SagaStep, SagaData]] = List(SagaEvent.StepProgressed(correlationId, stepName, result))
+                  val compEvents: List[SagaEvent[SagaStep, SagaData]] = NonEmptyList.fromList(steps.toList.filter(dispatch => compensation.contains(dispatch.name))).toList.flatMap { dispatches =>
+                    List(
+                      SagaEvent.CompensationTriggered(correlationId, dispatches),
+                      SagaEvent.CompensationStarted(correlationId, dispatches.head.name, dispatches.head.id)
+                    )
+                  }
+                  progressEvent ++ compEvents
+                } else {
+                  Nil
+                }
+            }
+          case None => Nil
+        }
     case SagaState.Compensating(current, todo) =>
+      val correlationId = commandSagaId(cmd)
       compensationHandler.unapply(cmd) match {
         case Some((stepName, result)) =>
           result match {
             case SagaStepResult.Completed =>
-              if(current === stepName) {
-                List(SagaEvent.CompensationProgressed(stepName, result)) ++ todo.headOption.map(SagaEvent.CompensationStarted(_))
+              if(current.name === stepName) {
+                List(SagaEvent.CompensationProgressed(correlationId, stepName, result)) ++ todo.headOption.map(next => SagaEvent.CompensationStarted(correlationId, next.name, next.id))
               } else {
                 Nil
               }
             case SagaStepResult.Failed =>
-              if(current === stepName) {
-                val progressEvent = List(SagaEvent.CompensationProgressed(stepName, result))
-                val startEvent = todo.headOption.map(SagaEvent.CompensationStarted(_)).toList
+              if(current.name === stepName) {
+                val progressEvent = List(SagaEvent.CompensationProgressed(correlationId, stepName, result))
+                val startEvent = todo.headOption.map(next => SagaEvent.CompensationStarted(correlationId, next.name, next.id)).toList
                 progressEvent ++ startEvent
               } else {
                 Nil
@@ -403,6 +504,15 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
           }
         case None => Nil
       }
+    case SagaState.Succeeded(sagaData, steps) =>
+      val correlationId = commandSagaId(cmd)
+      if compensateCommandClass.isInstance(cmd) then
+        List(
+          SagaEvent.CompensationTriggered(correlationId, steps),
+          SagaEvent.CompensationStarted(correlationId, steps.head.name, steps.head.id)
+        )
+      else
+        Nil
     case _ => Nil
   }
 
@@ -411,35 +521,37 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     * This is the replay function used both during normal execution and event-log replay.
     * It is total: unknown event/state combinations return the state unchanged.
     */
-  final def evolve(state: SagaState[Step], evt: SagaEvent[Step]): SagaState[Step] =
+  final def evolve(state: apparatus.core.patterns.SagaState[SagaStep, SagaData], evt: SagaEvent[SagaStep, SagaData]): apparatus.core.patterns.SagaState[SagaStep, SagaData] =
     state match {
       case SagaState.Waiting() =>
         evt match {
-          case SagaEvent.Booted(steps) => SagaState.Prepared(steps)
+          case booted: SagaEvent.Booted[SagaStep @unchecked, SagaData @unchecked] =>
+            SagaState.Prepared(booted.sagaState, booted.steps)
           case _ => state
         }
-      case SagaState.Prepared(steps) =>
+      case SagaState.Prepared(sagaData, steps) =>
         evt match {
-          case SagaEvent.StepStarted(_) => SagaState.Running(steps.head, steps.tail, SortedSet.empty)
+          case SagaEvent.StepStarted(_, _, _, _) =>
+            SagaState.Running(sagaData, steps.head, steps.tail.toList, SortedSet.empty[SagaStep], steps)
           case _ => state
         }
-      case SagaState.Running(current, todo, compensation) =>
+      case SagaState.Running(sagaData, current, todo, compensation, steps) =>
         evt match {
-          case SagaEvent.StepProgressed(name, SagaStepResult.Completed) =>
-            if todo.isEmpty then SagaState.Succeeded()
-            else SagaState.Running(todo.head, todo.tail, compensation + name)
-          case SagaEvent.CompensationTriggered(steps) =>
-            SagaState.CompensationPrepared(steps)
+          case SagaEvent.StepProgressed(_, name, SagaStepResult.Completed) =>
+            if todo.isEmpty then SagaState.Succeeded(sagaData, steps)
+            else SagaState.Running(sagaData, todo.head, todo.tail, compensation + current.name, steps)
+          case compensationTriggered: SagaEvent.CompensationTriggered[SagaStep @unchecked] =>
+            SagaState.CompensationPrepared(compensationTriggered.steps)
           case _ => state
         }
       case SagaState.CompensationPrepared(steps) =>
         evt match {
-          case SagaEvent.CompensationStarted(_) => SagaState.Compensating(steps.head, steps.tail)
+          case SagaEvent.CompensationStarted(_, _, _) => SagaState.Compensating(steps.head, steps.tail.toList)
           case _ => state
         }
       case SagaState.Compensating(_, todo) =>
         evt match {
-          case SagaEvent.CompensationProgressed(_, SagaStepResult.Completed) =>
+          case SagaEvent.CompensationProgressed(_, _, SagaStepResult.Completed) =>
             if todo.isEmpty then SagaState.Failed()
             else SagaState.Compensating(todo.head, todo.tail)
           case _ => state
@@ -451,7 +563,7 @@ trait SagaBehavior[Cmd, Step : {Order, Eq, Show}]:
     *
     * Lift it into an Apparatus with `behavior.decider.toBaseMachine`.
     */
-  def decider: Decider[SagaState[Step], Cmd, List[SagaEvent[Step]]] =
-    DeciderBuilder.seed[SagaState[Step]](name, SagaState.Waiting())
-      .decide[Cmd, List[SagaEvent[Step]]]((s, i) => decide(s, i))
+  def decider: Decider[apparatus.core.patterns.SagaState[SagaStep, SagaData], Cmd, List[SagaEvent[SagaStep, SagaData]]] =
+    DeciderBuilder.seed[apparatus.core.patterns.SagaState[SagaStep, SagaData]](name, SagaState.Waiting())
+      .decide[Cmd, List[SagaEvent[SagaStep, SagaData]]]((s, i) => decide(s, i))
       .evolveList((s, e) => evolve(s, e))

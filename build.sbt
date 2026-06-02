@@ -38,6 +38,18 @@ lazy val doobie = (project in file("doobie"))
   )
   .dependsOn(core)
 
+lazy val proteus = (project in file("proteus"))
+  .settings(commonSettings)
+  .settings(
+    name := "apparatus-proteus",
+    libraryDependencies ++= Seq(
+      "com.github.ghostdogpr" %% "proteus-grpc" % "0.4.1",
+      "com.github.ghostdogpr" %% "proteus-grpc-fs2" % "0.4.1"
+    )
+  )
+  .dependsOn(core)
+
+
 lazy val examples = (project in file("examples"))
   .settings(commonSettings)
   .settings(
@@ -61,7 +73,7 @@ lazy val tests = (project in file("tests"))
       "org.typelevel" %% "munit-cats-effect"               % "2.0.0"  % Test
     )
   )
-  .dependsOn(examples % Test, doobie % Test)
+  .dependsOn(proteus % Test, examples % Test, doobie % Test)
 
 lazy val docs = project
   .in(file("docs"))
@@ -75,8 +87,21 @@ lazy val docs = project
     mdocVariables  := Map("VERSION" -> version.value)
   )
 
+lazy val demo = (project in file("demo"))
+  .settings(commonSettings)
+  .settings(
+    name           := "apparatus-demo",
+    publish / skip := true,
+    libraryDependencies ++= Seq(
+      "is.cir"  %% "ciris"             % "3.5.0",
+      "io.grpc"  % "grpc-netty-shaded" % "1.81.0",
+      "io.grpc"  % "grpc-services"     % "1.81.0"
+    )
+  )
+  .dependsOn(core, doobie, proteus, examples)
+
 lazy val root = (project in file("."))
-  .aggregate(core, doobie, examples, tests)
+  .aggregate(core, doobie, proteus, examples, tests, demo)
   .settings(
     publish / skip := true
   )
