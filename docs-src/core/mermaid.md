@@ -15,14 +15,14 @@ import cats.implicits.*
 ## Basic usage
 
 ```scala mdoc:silent
-val diagram: String = Mermaid.print(saga[Id]())
+val diagram: String = Mermaid.print(saga[Id](BookingServices.default[Id]))
 ```
 
 Paste the result into [mermaid.live](https://mermaid.live) or drop it into a Markdown renderer
 that supports Mermaid fenced code blocks. Alternatively call `.mermaid` as an extension method:
 
 ```scala mdoc:silent
-val diagram2: String = saga[Id]().mermaid
+val diagram2: String = saga[Id](BookingServices.default[Id]).mermaid
 ```
 
 ## Attaching labels
@@ -111,6 +111,6 @@ import java.util.UUID
 
 val labeled: Apparatus[SyncIO, FlightCommand, List[FlightEvent]] =
   Apparatus
-    .aggregateMachine[SyncIO, FlightCommand, FlightEvent](flightDecider(), _.id)
+    .aggregateMachine[SyncIO, FlightCommand, FlightEvent](flightDecider, _.id)
     .label("Flight Decider")
 ```

@@ -77,7 +77,7 @@ object BookingSagaMocks:
   def hotelReservedMachine[F[_]: Applicative]: Apparatus[F, HotelCommand, List[HotelEvent]] =
     hotelMachine(
       hotelDecider.evolveFrom(List(
-        HotelEvent.SearchStarted(hotelId, bookingId, BookingDomain.hotelQuery),
-        HotelEvent.Reserved(hotelId, bookingId)
+        HotelEvent.SearchStarted(BookingDomain.hotelId, BookingDomain.bookingId, BookingDomain.hotelQuery),
+        HotelEvent.Reserved(BookingDomain.hotelId, BookingDomain.bookingId)
       ))
     )

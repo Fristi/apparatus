@@ -45,7 +45,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: BookingCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
-    val prg = saga[ConnectionIO](bookingServices)
+    val prg = saga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 
@@ -54,21 +54,21 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
       val xa = makeTransactor(c)
       for
         _      <- createSchema.transact(xa)
-        events <- runCommand(xa)(BookingCommand.Start(bookingId, BookingDomain.sagaState))
+        events <- runCommand(xa)(BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState))
       yield assertEquals(
         events,
         List(
-          SagaEvent.Booted(bookingId, BookingDomain.sagaState, NonEmptyList.of(
-            SagaState.StepDispatch(BookingStep.Hotel, hotelId),
-            SagaState.StepDispatch(BookingStep.Car, carId),
-            SagaState.StepDispatch(BookingStep.Flight, flightId)
+          SagaEvent.Booted(BookingDomain.bookingId, BookingDomain.sagaState, NonEmptyList.of(
+            SagaState.StepDispatch(BookingStep.Hotel, BookingDomain.hotelId),
+            SagaState.StepDispatch(BookingStep.Car, BookingDomain.carId),
+            SagaState.StepDispatch(BookingStep.Flight, BookingDomain.flightId)
           )),
-          SagaEvent.StepStarted(bookingId, BookingDomain.sagaState, BookingStep.Hotel, hotelId),
-          SagaEvent.StepProgressed(bookingId, BookingStep.Hotel, SagaStepResult.Completed),
-          SagaEvent.StepStarted(bookingId, BookingDomain.sagaState, BookingStep.Car, carId),
-          SagaEvent.StepProgressed(bookingId, BookingStep.Car, SagaStepResult.Completed),
-          SagaEvent.StepStarted(bookingId, BookingDomain.sagaState, BookingStep.Flight, flightId),
-          SagaEvent.StepProgressed(bookingId, BookingStep.Flight, SagaStepResult.Completed)
+          SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.sagaState, BookingStep.Hotel, BookingDomain.hotelId),
+          SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Hotel, SagaStepResult.Completed),
+          SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.sagaState, BookingStep.Car, BookingDomain.carId),
+          SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Car, SagaStepResult.Completed),
+          SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.sagaState, BookingStep.Flight, BookingDomain.flightId),
+          SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Completed)
         )
       )
     }

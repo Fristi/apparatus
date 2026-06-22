@@ -11,13 +11,6 @@ import zio.blocks.schema.Schema
 import java.time.LocalDate
 import java.util.UUID
 
-// ── Sub-aggregate IDs (fixed for this example) ───────────────────────────────
-
-val flightId  = UUID.fromString("00000000-0000-0000-0000-000000000001")
-val carId     = UUID.fromString("00000000-0000-0000-0000-000000000002")
-val hotelId   = UUID.fromString("00000000-0000-0000-0000-000000000003")
-val bookingId = UUID.fromString("00000000-0000-0000-0000-000000000004")
-
 /** Booking saga service events carry aggregate `id` and saga `bookingId`. */
 trait BookingCorrelated extends SagaCorrelated:
   def id: UUID
@@ -307,41 +300,46 @@ object BookingCommand:
   case class Compensate(id: UUID) extends BookingCommand
   case class Advance(id: UUID, step: BookingStep, phase: SagaPhase, result: SagaStepResult) extends BookingCommand
 
-  val advancePrism: SagaAdvancePrism[BookingCommand, BookingStep] =
-    new Prism[BookingCommand, (UUID, BookingStep, SagaPhase, SagaStepResult)] {
-      override def getOption(input: BookingCommand): Option[(UUID, BookingStep, SagaPhase, SagaStepResult)] =
-        input match {
-          case BookingCommand.Advance(id, step, phase, result) => Some((id, step, phase, result))
-          case _ => None
-        }
-
-      override def reverseGet(input: (UUID, BookingStep, SagaPhase, SagaStepResult)): BookingCommand =
-        val (id, step, phase, result) = input
-        BookingCommand.Advance(id, step, phase, result)
-    }
+  val advanceCodec: SagaAdvanceCodec[BookingCommand, BookingStep] =
+    SagaAdvanceCodec(
+      {
+        case BookingCommand.Advance(id, step, phase, result) => Some((id, step, phase, result))
+        case _ => None
+      },
+      (id, step, phase, result) => BookingCommand.Advance(id, step, phase, result)
+    )
 
 enum BookingStep(val position: Int) derives Eq, Order, Show, Schema:
   case Hotel extends BookingStep(1)
   case Car extends BookingStep(2)
   case Flight extends BookingStep(3)
 
-val bookingStepSagaStepCorrelationIdGenerator: SagaStepCorrelationIdGenerator[BookingStep] = new SagaStepCorrelationIdGenerator[BookingStep]:
-  override def next(step: BookingStep): UUID = step match
-    case BookingStep.Hotel => hotelId
-    case BookingStep.Car => carId
-    case BookingStep.Flight => flightId
+def bookingBehavior(
+  uuidGen: SagaStepCorrelationIdGenerator[BookingStep] = SagaStepCorrelationIdGenerator.random
+): SagaBehavior[BookingCommand, BookingStep, BookingSagaState] =
+  SagaBehaviorFactory(
+    name = "booking",
+    startCommand = { case BookingCommand.Start(id, state) => (id, state) },
+    compensateCommand = { case BookingCommand.Compensate(id) => id },
+    commandCorrelationId = _.id,
+    codec = BookingCommand.advanceCodec,
+    steps = NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight),
+    uuidGen = uuidGen
+  )
+
+val behavior: SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = bookingBehavior()
 
 val flightStep = new SagaStepAdapter[FlightCommand, FlightEvent, BookingStep, BookingSagaState] {
   override def step: BookingStep = BookingStep.Flight
   override def start(id: UUID, state: BookingSagaState, correlationId: UUID): FlightCommand =
     FlightCommand.InitSearch(id, FlightQuery(state.fromCity, state.toCity, state.fromDate, state.toDate), correlationId)
   override def compensate(id: UUID): FlightCommand = FlightCommand.Cancel(id)
-  override def classify(event: FlightEvent): Option[(SagaPhase, SagaStepResult)] = event match {
-    case FlightEvent.Reserved(_, _)     => Some(SagaPhase.Forward -> SagaStepResult.Completed)
-    case FlightEvent.Failed(_, _)       => Some(SagaPhase.Forward -> SagaStepResult.Failed)
-    case FlightEvent.Compensated(_, _)  => Some(SagaPhase.Compensation -> SagaStepResult.Completed)
-    case _                              => None
-  }
+  override def classify(event: FlightEvent): Option[(SagaPhase, SagaStepResult)] =
+    SagaStepAdapter.classifyReserveSearch(
+      { case FlightEvent.Reserved(_, _)    => () },
+      { case FlightEvent.Failed(_, _)      => () },
+      { case FlightEvent.Compensated(_, _) => () }
+    )(event)
 }
 
 val carStep = new SagaStepAdapter[CarCommand, CarEvent, BookingStep, BookingSagaState] {
@@ -349,12 +347,12 @@ val carStep = new SagaStepAdapter[CarCommand, CarEvent, BookingStep, BookingSaga
   override def start(id: UUID, state: BookingSagaState, correlationId: UUID): CarCommand =
     CarCommand.InitSearch(id, CarQuery(state.toCity, state.fromDate, state.toDate), correlationId)
   override def compensate(id: UUID): CarCommand = CarCommand.Cancel(id)
-  override def classify(event: CarEvent): Option[(SagaPhase, SagaStepResult)] = event match {
-    case CarEvent.Reserved(_, _)     => Some(SagaPhase.Forward -> SagaStepResult.Completed)
-    case CarEvent.Failed(_, _)       => Some(SagaPhase.Forward -> SagaStepResult.Failed)
-    case CarEvent.Compensated(_, _)  => Some(SagaPhase.Compensation -> SagaStepResult.Completed)
-    case _                           => None
-  }
+  override def classify(event: CarEvent): Option[(SagaPhase, SagaStepResult)] =
+    SagaStepAdapter.classifyReserveSearch(
+      { case CarEvent.Reserved(_, _)    => () },
+      { case CarEvent.Failed(_, _)      => () },
+      { case CarEvent.Compensated(_, _) => () }
+    )(event)
 }
 
 val hotelStep = new SagaStepAdapter[HotelCommand, HotelEvent, BookingStep, BookingSagaState] {
@@ -362,92 +360,81 @@ val hotelStep = new SagaStepAdapter[HotelCommand, HotelEvent, BookingStep, Booki
   override def start(id: UUID, state: BookingSagaState, correlationId: UUID): HotelCommand =
     HotelCommand.InitSearch(id, HotelQuery(state.toCity, state.fromDate, state.toDate), correlationId)
   override def compensate(id: UUID): HotelCommand = HotelCommand.Cancel(id)
-  override def classify(event: HotelEvent): Option[(SagaPhase, SagaStepResult)] = event match {
-    case HotelEvent.Reserved(_, _)     => Some(SagaPhase.Forward -> SagaStepResult.Completed)
-    case HotelEvent.Failed(_, _)       => Some(SagaPhase.Forward -> SagaStepResult.Failed)
-    case HotelEvent.Compensated(_, _)  => Some(SagaPhase.Compensation -> SagaStepResult.Completed)
-    case _                             => None
-  }
+  override def classify(event: HotelEvent): Option[(SagaPhase, SagaStepResult)] =
+    SagaStepAdapter.classifyReserveSearch(
+      { case HotelEvent.Reserved(_, _)    => () },
+      { case HotelEvent.Failed(_, _)      => () },
+      { case HotelEvent.Compensated(_, _) => () }
+    )(event)
 }
-
-val behavior: SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = SagaBehaviorFactory(
-  name = "booking",
-  startCommandClass = classOf[BookingCommand.Start],
-  compensateCommandClass = classOf[BookingCommand.Compensate],
-  sagaIdExtractor = _.id,
-  sagaStateExtractor = { case BookingCommand.Start(_, state) => state },
-  prism = BookingCommand.advancePrism,
-  steps = NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight),
-  uuidGen = bookingStepSagaStepCorrelationIdGenerator
-)
 
 type BookingDecider = Decider[SagaState[BookingStep, BookingSagaState], BookingCommand, List[SagaEvent[BookingStep, BookingSagaState]]]
 
-private def flightServiceFSM[F[_]: Applicative](
-  services: BookingServices[F],
-  machine:  Apparatus[F, FlightCommand, List[FlightEvent]]
-): Apparatus[F, SagaEvent[BookingStep, BookingSagaState], List[BookingCommand]] =
-  flightStep
-    .rmap(
-      flightStep.lmapOrEmpty(machine.feedback(flightSearchConnector(services.flight))),
-      BookingCommand.advancePrism
-    )
-    .label("Flight service")
+/** Sub-aggregate machines wired into the booking saga service network. */
+final case class BookingMachines[F[_]](
+  flight: Apparatus[F, FlightCommand, List[FlightEvent]],
+  car:    Apparatus[F, CarCommand, List[CarEvent]],
+  hotel:  Apparatus[F, HotelCommand, List[HotelEvent]]
+)
 
-private def carServiceFSM[F[_]: Applicative](
-  services: BookingServices[F],
-  machine:  Apparatus[F, CarCommand, List[CarEvent]]
-): Apparatus[F, SagaEvent[BookingStep, BookingSagaState], List[BookingCommand]] =
-  carStep
-    .rmap(
-      carStep.lmapOrEmpty(machine.feedback(carSearchConnector(services.car))),
-      BookingCommand.advancePrism
-    )
-    .label("Car service")
+object BookingMachines:
+  def default[F[_]: Applicative]: BookingMachines[F] =
+    BookingMachines(flightMachine[F](), carMachine[F](), hotelMachine[F]())
 
-private def hotelServiceFSM[F[_]: Applicative](
-  services: BookingServices[F],
-  machine:  Apparatus[F, HotelCommand, List[HotelEvent]]
+private def serviceFSM[F[_]: Applicative, Cmd, Evt <: SagaCorrelated](
+  adapter:   SagaStepAdapter[Cmd, Evt, BookingStep, BookingSagaState],
+  machine:   Apparatus[F, Cmd, List[Evt]],
+  connector: Apparatus[F, Evt, List[Cmd]],
+  label:     String
 ): Apparatus[F, SagaEvent[BookingStep, BookingSagaState], List[BookingCommand]] =
-  hotelStep
-    .rmap(
-      hotelStep.lmapOrEmpty(machine.feedback(hotelSearchConnector(services.hotel))),
-      BookingCommand.advancePrism
-    )
-    .label("Hotel service")
+  adapter
+    .adapt(machine.feedback(connector), BookingCommand.advanceCodec)
+    .label(label)
 
 private def serviceNetwork[F[_]: Applicative](
-  bookingServices: BookingServices[F],
-  flight:          Apparatus[F, FlightCommand, List[FlightEvent]],
-  car:             Apparatus[F, CarCommand, List[CarEvent]],
-  hotel:           Apparatus[F, HotelCommand, List[HotelEvent]]
+  services:  BookingServices[F],
+  machines:  BookingMachines[F]
 ): Apparatus[F, SagaEvent[BookingStep, BookingSagaState], List[BookingCommand]] =
-  flightServiceFSM[F](bookingServices, flight)
-    .merge(carServiceFSM[F](bookingServices, car).merge(hotelServiceFSM[F](bookingServices, hotel)))
+  serviceFSM(flightStep, machines.flight, flightSearchConnector(services.flight), "Flight service")
+    .merge(serviceFSM(carStep, machines.car, carSearchConnector(services.car), "Car service"))
+    .merge(serviceFSM(hotelStep, machines.hotel, hotelSearchConnector(services.hotel), "Hotel service"))
 
-def saga[F[_]: Applicative](bookingServices: BookingServices[F]): Apparatus[F, BookingCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
-  Apparatus.aggregateMachine[F, BookingCommand, SagaEvent[BookingStep, BookingSagaState]](behavior.decider, _.id)
-    .feedback(serviceNetwork(bookingServices, flightMachine[F](), carMachine[F](), hotelMachine[F]()))
+private def bookingOrchestratorLoop[F[_]: Applicative](
+  booking:  BookingDecider,
+  services: BookingServices[F],
+  machines: BookingMachines[F]
+): Apparatus[F, List[BookingCommand], List[SagaEvent[BookingStep, BookingSagaState]]] =
+  Apparatus
+    .aggregateMachine[F, BookingCommand, SagaEvent[BookingStep, BookingSagaState]](booking, _.id)
+    .feedbackMany(serviceNetwork(services, machines))
+
+def saga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
+): Apparatus[F, BookingCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  saga(bookingServices, sagaBehavior, BookingMachines.default[F])
+
+def saga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState],
+  machines:        BookingMachines[F]
+): Apparatus[F, BookingCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  bookingOrchestratorLoop(sagaBehavior.decider, bookingServices, machines).lmap(List(_))
 
 def sagaRerootedAtCar[F[_]: Applicative](
   booking:         BookingDecider,
   bookingServices: BookingServices[F]
 ): Apparatus[F, CarCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
-  sagaRerootedAtCar(booking, bookingServices, flightMachine[F](), carMachine[F](), hotelMachine[F]())
+  sagaRerootedAtCar(booking, bookingServices, BookingMachines.default[F])
 
 def sagaRerootedAtCar[F[_]: Applicative](
   booking:         BookingDecider,
   bookingServices: BookingServices[F],
-  flight:          Apparatus[F, FlightCommand, List[FlightEvent]],
-  car:             Apparatus[F, CarCommand, List[CarEvent]],
-  hotel:           Apparatus[F, HotelCommand, List[HotelEvent]]
+  machines:        BookingMachines[F]
 ): Apparatus[F, CarCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
   carStep
     .rmap(
-      car.feedback(carSearchConnector(bookingServices.car)),
-      BookingCommand.advancePrism
+      machines.car.feedback(carSearchConnector(bookingServices.car)),
+      BookingCommand.advanceCodec
     )
-    .andThen(
-      Apparatus.aggregateMachine[F, BookingCommand, SagaEvent[BookingStep, BookingSagaState]](booking, _.id)
-        .feedbackMany(serviceNetwork(bookingServices, flight, car, hotel))
-    )
+    .andThen(bookingOrchestratorLoop(booking, bookingServices, machines))
