@@ -22,7 +22,16 @@ object BookingDomain:
   val testBehavior: SagaBehavior[BookingCommand, BookingStep, BookingSagaState] =
     bookingBehavior(stepCorrelationIdGenerator)
 
-  val sagaState = BookingSagaState(fromCity = "Amsterdam", toCity = "London", fromDate = LocalDate.of(2026, 11, 1), toDate = LocalDate.of(2026, 11, 8))
+  val sagaState = BookingSagaState(
+    fromCity = "Amsterdam",
+    toCity = "London",
+    fromDate = LocalDate.of(2026, 11, 1),
+    toDate = LocalDate.of(2026, 11, 8),
+    flow = BookingFlow.Civilian
+  )
+
+  val diplomatSagaState: BookingSagaState = sagaState.copy(flow = BookingFlow.Diplomat)
+
   val carQuery = CarQuery(sagaState.toCity, sagaState.fromDate, sagaState.toDate)
   val hotelQuery = HotelQuery(sagaState.toCity, sagaState.fromDate, sagaState.toDate)
   val flightQuery = FlightQuery(sagaState.fromCity, sagaState.toCity, sagaState.fromDate, sagaState.toDate)

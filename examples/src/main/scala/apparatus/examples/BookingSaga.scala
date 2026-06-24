@@ -17,25 +17,38 @@ trait BookingCorrelated extends SagaCorrelated:
   def bookingId: UUID
   final def correlationId: UUID = bookingId
 
+// ── Booking flow ──────────────────────────────────────────────────────────────
+
+enum BookingFlow derives Eq, Schema:
+  case Civilian
+  case Diplomat
+
 // ── Flight ────────────────────────────────────────────────────────────────────
 
 final case class FlightQuery(from: String, to: String, fromDate: LocalDate, toDate: LocalDate)
 
 enum FlightState {
   case Seed
-  case Searching(bookingId: UUID)
+  case Searching(bookingId: UUID, flow: BookingFlow)
+  case AwaitingClearance(bookingId: UUID, flightNumber: String)
   case Reserved(bookingId: UUID)
   case Cancelled
 
   def decide(cmd: FlightCommand): List[FlightEvent] = this match
     case FlightState.Seed =>
       cmd match
-        case FlightCommand.InitSearch(id, query, bookingId) => List(FlightEvent.SearchStarted(id, bookingId, query))
-        case _                                              => Nil
-    case FlightState.Searching(bookingId) =>
+        case FlightCommand.InitSearch(id, query, bookingId, flow) => List(FlightEvent.SearchStarted(id, bookingId, query, flow))
+        case _                                                    => Nil
+    case FlightState.Searching(bookingId, _) =>
       cmd match
-        case FlightCommand.SelectFlight(id, _) => List(FlightEvent.Reserved(id, bookingId))
-        case FlightCommand.NoFlightFound(id)   => List(FlightEvent.Failed(id, bookingId))
+        case FlightCommand.SelectFlight(id, flightNumber) => List(FlightEvent.Reserved(id, bookingId))
+        case FlightCommand.NoFlightFound(id)            => List(FlightEvent.Failed(id, bookingId))
+        case FlightCommand.RequestClearance(id, number) => List(FlightEvent.ClearanceRequired(id, bookingId, number))
+        case _                                            => Nil
+    case FlightState.AwaitingClearance(bookingId, _) =>
+      cmd match
+        case FlightCommand.VerifyClearance(id) => List(FlightEvent.Reserved(id, bookingId))
+        case FlightCommand.RejectClearance(id) => List(FlightEvent.Failed(id, bookingId))
         case _                                 => Nil
     case FlightState.Reserved(bookingId) =>
       cmd match
@@ -46,9 +59,15 @@ enum FlightState {
   def evolve(ev: FlightEvent): FlightState = this match
     case FlightState.Seed =>
       ev match
-        case FlightEvent.SearchStarted(_, bookingId, _) => FlightState.Searching(bookingId)
-        case _                                          => this
-    case FlightState.Searching(bookingId) =>
+        case FlightEvent.SearchStarted(_, bookingId, _, flow) => FlightState.Searching(bookingId, flow)
+        case _                                                => this
+    case FlightState.Searching(bookingId, _) =>
+      ev match
+        case FlightEvent.Reserved(_, _)           => FlightState.Reserved(bookingId)
+        case FlightEvent.Failed(_, _)            => FlightState.Seed
+        case FlightEvent.ClearanceRequired(_, _, number) => FlightState.AwaitingClearance(bookingId, number)
+        case _                                   => this
+    case FlightState.AwaitingClearance(bookingId, number) =>
       ev match
         case FlightEvent.Reserved(_, _) => FlightState.Reserved(bookingId)
         case FlightEvent.Failed(_, _)   => FlightState.Seed
@@ -64,13 +83,17 @@ sealed trait FlightCommand:
   val id: UUID
 
 object FlightCommand:
-  case class InitSearch(id: UUID, query: FlightQuery, bookingId: UUID) extends FlightCommand
-  case class SelectFlight(id: UUID, flightNumber: String)            extends FlightCommand
-  case class NoFlightFound(id: UUID)                                 extends FlightCommand
-  case class Cancel(id: UUID)                                        extends FlightCommand
+  case class InitSearch(id: UUID, query: FlightQuery, bookingId: UUID, flow: BookingFlow) extends FlightCommand
+  case class SelectFlight(id: UUID, flightNumber: String)                                 extends FlightCommand
+  case class NoFlightFound(id: UUID)                                                      extends FlightCommand
+  case class RequestClearance(id: UUID, flightNumber: String)                             extends FlightCommand
+  case class VerifyClearance(id: UUID)                                                    extends FlightCommand
+  case class RejectClearance(id: UUID)                                                    extends FlightCommand
+  case class Cancel(id: UUID)                                                             extends FlightCommand
 
 enum FlightEvent extends BookingCorrelated derives Schema:
-  case SearchStarted(id: UUID, bookingId: UUID, query: FlightQuery)
+  case SearchStarted(id: UUID, bookingId: UUID, query: FlightQuery, flow: BookingFlow)
+  case ClearanceRequired(id: UUID, bookingId: UUID, flightNumber: String)
   case Reserved(id: UUID, bookingId: UUID)
   case Failed(id: UUID, bookingId: UUID)
   case Compensated(id: UUID, bookingId: UUID)
@@ -94,9 +117,14 @@ def flightMachine[F[_]: Applicative](
 
 private def flightSearchConnector[F[_]: Applicative](service: FlightService[F]): Apparatus[F, FlightEvent, List[FlightCommand]] =
   Apparatus.closedMealy(ClosedMealy.stateless[F, FlightEvent, List[FlightCommand]] {
-    case FlightEvent.SearchStarted(id, _, query) =>
+    case FlightEvent.SearchStarted(id, _, query, BookingFlow.Civilian) =>
       service.searchFlight(query).map {
         case Some(flightNumber) => List(FlightCommand.SelectFlight(id, flightNumber))
+        case None               => List(FlightCommand.NoFlightFound(id))
+      }
+    case FlightEvent.SearchStarted(id, _, query, BookingFlow.Diplomat) =>
+      service.searchFlight(query).map {
+        case Some(flightNumber) => List(FlightCommand.RequestClearance(id, flightNumber))
         case None               => List(FlightCommand.NoFlightFound(id))
       }
     case _ => Nil.pure[F]
@@ -108,20 +136,27 @@ final case class CarQuery(city: String, from: LocalDate, to: LocalDate)
 
 enum CarState {
   case Seed
-  case Searching(bookingId: UUID)
+  case Searching(bookingId: UUID, flow: BookingFlow)
+  case AwaitingLicenseCheck(bookingId: UUID, carModel: String)
   case Reserved(bookingId: UUID)
   case Cancelled
 
   def decide(cmd: CarCommand): List[CarEvent] = this match
     case CarState.Seed =>
       cmd match
-        case CarCommand.InitSearch(id, query, bookingId) => List(CarEvent.SearchStarted(id, bookingId, query))
-        case _                                         => Nil
-    case CarState.Searching(bookingId) =>
+        case CarCommand.InitSearch(id, query, bookingId, flow) => List(CarEvent.SearchStarted(id, bookingId, query, flow))
+        case _                                               => Nil
+    case CarState.Searching(bookingId, _) =>
       cmd match
-        case CarCommand.SelectCar(id, _) => List(CarEvent.Reserved(id, bookingId))
-        case CarCommand.NoCarFound(id)   => List(CarEvent.Failed(id, bookingId))
-        case _                           => Nil
+        case CarCommand.SelectCar(id, _)              => List(CarEvent.Reserved(id, bookingId))
+        case CarCommand.NoCarFound(id)                => List(CarEvent.Failed(id, bookingId))
+        case CarCommand.RequestLicenseCheck(id, model) => List(CarEvent.LicenseCheckRequired(id, bookingId, model))
+        case _                                        => Nil
+    case CarState.AwaitingLicenseCheck(bookingId, _) =>
+      cmd match
+        case CarCommand.VerifyDriverLicense(id) => List(CarEvent.Reserved(id, bookingId))
+        case CarCommand.RejectDriverLicense(id) => List(CarEvent.Failed(id, bookingId))
+        case _                                  => Nil
     case CarState.Reserved(bookingId) =>
       cmd match
         case CarCommand.Cancel(id) => List(CarEvent.Compensated(id, bookingId))
@@ -131,9 +166,15 @@ enum CarState {
   def evolve(ev: CarEvent): CarState = this match
     case CarState.Seed =>
       ev match
-        case CarEvent.SearchStarted(_, bookingId, _) => CarState.Searching(bookingId)
-        case _                                       => this
-    case CarState.Searching(bookingId) =>
+        case CarEvent.SearchStarted(_, bookingId, _, flow) => CarState.Searching(bookingId, flow)
+        case _                                             => this
+    case CarState.Searching(bookingId, _) =>
+      ev match
+        case CarEvent.Reserved(_, _) => CarState.Reserved(bookingId)
+        case CarEvent.Failed(_, _)   => CarState.Seed
+        case CarEvent.LicenseCheckRequired(_, _, model) => CarState.AwaitingLicenseCheck(bookingId, model)
+        case _                       => this
+    case CarState.AwaitingLicenseCheck(bookingId, model) =>
       ev match
         case CarEvent.Reserved(_, _) => CarState.Reserved(bookingId)
         case CarEvent.Failed(_, _)   => CarState.Seed
@@ -149,13 +190,17 @@ sealed trait CarCommand:
   val id: UUID
 
 object CarCommand:
-  case class InitSearch(id: UUID, query: CarQuery, bookingId: UUID) extends CarCommand
-  case class SelectCar(id: UUID, carModel: String)                  extends CarCommand
-  case class NoCarFound(id: UUID)                                   extends CarCommand
-  case class Cancel(id: UUID)                                       extends CarCommand
+  case class InitSearch(id: UUID, query: CarQuery, bookingId: UUID, flow: BookingFlow) extends CarCommand
+  case class SelectCar(id: UUID, carModel: String)                                    extends CarCommand
+  case class NoCarFound(id: UUID)                                                     extends CarCommand
+  case class RequestLicenseCheck(id: UUID, carModel: String)                          extends CarCommand
+  case class VerifyDriverLicense(id: UUID)                                            extends CarCommand
+  case class RejectDriverLicense(id: UUID)                                            extends CarCommand
+  case class Cancel(id: UUID)                                                         extends CarCommand
 
 enum CarEvent extends BookingCorrelated derives Schema:
-  case SearchStarted(id: UUID, bookingId: UUID, query: CarQuery)
+  case SearchStarted(id: UUID, bookingId: UUID, query: CarQuery, flow: BookingFlow)
+  case LicenseCheckRequired(id: UUID, bookingId: UUID, carModel: String)
   case Reserved(id: UUID, bookingId: UUID)
   case Failed(id: UUID, bookingId: UUID)
   case Compensated(id: UUID, bookingId: UUID)
@@ -179,9 +224,14 @@ def carMachine[F[_]: Applicative](
 
 private def carSearchConnector[F[_]: Applicative](service: CarService[F]): Apparatus[F, CarEvent, List[CarCommand]] =
   Apparatus.closedMealy(ClosedMealy.stateless[F, CarEvent, List[CarCommand]] {
-    case CarEvent.SearchStarted(id, _, query) =>
+    case CarEvent.SearchStarted(id, _, query, BookingFlow.Civilian) =>
       service.searchCar(query).map {
         case Some(carModel) => List(CarCommand.SelectCar(id, carModel))
+        case None           => List(CarCommand.NoCarFound(id))
+      }
+    case CarEvent.SearchStarted(id, _, query, BookingFlow.Diplomat) =>
+      service.searchCar(query).map {
+        case Some(carModel) => List(CarCommand.RequestLicenseCheck(id, carModel))
         case None           => List(CarCommand.NoCarFound(id))
       }
     case _ => Nil.pure[F]
@@ -191,23 +241,29 @@ private def carSearchConnector[F[_]: Applicative](service: CarService[F]): Appar
 
 final case class HotelQuery(city: String, from: LocalDate, to: LocalDate)
 
-
 enum HotelState {
   case Seed
-  case Searching(bookingId: UUID)
+  case Searching(bookingId: UUID, flow: BookingFlow)
+  case AwaitingBackgroundCheck(bookingId: UUID, hotelName: String)
   case Reserved(bookingId: UUID)
   case Cancelled
 
   def decide(cmd: HotelCommand): List[HotelEvent] = this match
     case HotelState.Seed =>
       cmd match
-        case HotelCommand.InitSearch(id, query, bookingId) => List(HotelEvent.SearchStarted(id, bookingId, query))
-        case _                                             => Nil
-    case HotelState.Searching(bookingId) =>
+        case HotelCommand.InitSearch(id, query, bookingId, flow) => List(HotelEvent.SearchStarted(id, bookingId, query, flow))
+        case _                                                   => Nil
+    case HotelState.Searching(bookingId, _) =>
       cmd match
-        case HotelCommand.SelectHotel(id, _) => List(HotelEvent.Reserved(id, bookingId))
-        case HotelCommand.NoHotelFound(id)   => List(HotelEvent.Failed(id, bookingId))
-        case _                                 => Nil
+        case HotelCommand.SelectHotel(id, _)               => List(HotelEvent.Reserved(id, bookingId))
+        case HotelCommand.NoHotelFound(id)                 => List(HotelEvent.Failed(id, bookingId))
+        case HotelCommand.RequestBackgroundCheck(id, name) => List(HotelEvent.BackgroundCheckRequired(id, bookingId, name))
+        case _                                             => Nil
+    case HotelState.AwaitingBackgroundCheck(bookingId, _) =>
+      cmd match
+        case HotelCommand.VerifyBackgroundCheck(id) => List(HotelEvent.Reserved(id, bookingId))
+        case HotelCommand.RejectBackgroundCheck(id) => List(HotelEvent.Failed(id, bookingId))
+        case _                                      => Nil
     case HotelState.Reserved(bookingId) =>
       cmd match
         case HotelCommand.Cancel(id) => List(HotelEvent.Compensated(id, bookingId))
@@ -217,9 +273,15 @@ enum HotelState {
   def evolve(ev: HotelEvent): HotelState = this match
     case HotelState.Seed =>
       ev match
-        case HotelEvent.SearchStarted(_, bookingId, _) => HotelState.Searching(bookingId)
-        case _                                         => this
-    case HotelState.Searching(bookingId) =>
+        case HotelEvent.SearchStarted(_, bookingId, _, flow) => HotelState.Searching(bookingId, flow)
+        case _                                               => this
+    case HotelState.Searching(bookingId, _) =>
+      ev match
+        case HotelEvent.Reserved(_, _) => HotelState.Reserved(bookingId)
+        case HotelEvent.Failed(_, _)   => HotelState.Seed
+        case HotelEvent.BackgroundCheckRequired(_, _, name) => HotelState.AwaitingBackgroundCheck(bookingId, name)
+        case _                         => this
+    case HotelState.AwaitingBackgroundCheck(bookingId, name) =>
       ev match
         case HotelEvent.Reserved(_, _) => HotelState.Reserved(bookingId)
         case HotelEvent.Failed(_, _)   => HotelState.Seed
@@ -235,13 +297,17 @@ sealed trait HotelCommand:
   val id: UUID
 
 object HotelCommand:
-  case class InitSearch(id: UUID, query: HotelQuery, bookingId: UUID) extends HotelCommand
-  case class SelectHotel(id: UUID, hotelName: String)                 extends HotelCommand
-  case class NoHotelFound(id: UUID)                                   extends HotelCommand
-  case class Cancel(id: UUID)                                         extends HotelCommand
+  case class InitSearch(id: UUID, query: HotelQuery, bookingId: UUID, flow: BookingFlow) extends HotelCommand
+  case class SelectHotel(id: UUID, hotelName: String)                                      extends HotelCommand
+  case class NoHotelFound(id: UUID)                                                        extends HotelCommand
+  case class RequestBackgroundCheck(id: UUID, hotelName: String)                           extends HotelCommand
+  case class VerifyBackgroundCheck(id: UUID)                                               extends HotelCommand
+  case class RejectBackgroundCheck(id: UUID)                                               extends HotelCommand
+  case class Cancel(id: UUID)                                                              extends HotelCommand
 
 enum HotelEvent extends BookingCorrelated derives Schema:
-  case SearchStarted(id: UUID, bookingId: UUID, query: HotelQuery)
+  case SearchStarted(id: UUID, bookingId: UUID, query: HotelQuery, flow: BookingFlow)
+  case BackgroundCheckRequired(id: UUID, bookingId: UUID, hotelName: String)
   case Reserved(id: UUID, bookingId: UUID)
   case Failed(id: UUID, bookingId: UUID)
   case Compensated(id: UUID, bookingId: UUID)
@@ -265,9 +331,14 @@ def hotelMachine[F[_]: Applicative](
 
 private def hotelSearchConnector[F[_]: Applicative](service: HotelService[F]): Apparatus[F, HotelEvent, List[HotelCommand]] =
   Apparatus.closedMealy(ClosedMealy.stateless[F, HotelEvent, List[HotelCommand]] {
-    case HotelEvent.SearchStarted(id, _, query) =>
+    case HotelEvent.SearchStarted(id, _, query, BookingFlow.Civilian) =>
       service.searchHotel(query).map {
         case Some(hotelName) => List(HotelCommand.SelectHotel(id, hotelName))
+        case None            => List(HotelCommand.NoHotelFound(id))
+      }
+    case HotelEvent.SearchStarted(id, _, query, BookingFlow.Diplomat) =>
+      service.searchHotel(query).map {
+        case Some(hotelName) => List(HotelCommand.RequestBackgroundCheck(id, hotelName))
         case None            => List(HotelCommand.NoHotelFound(id))
       }
     case _ => Nil.pure[F]
@@ -292,7 +363,8 @@ final case class BookingSagaState(
   fromCity: String,
   toCity: String,
   fromDate: LocalDate,
-  toDate: LocalDate
+  toDate: LocalDate,
+  flow: BookingFlow = BookingFlow.Civilian
 ) derives Schema
 
 object BookingCommand:
@@ -332,7 +404,7 @@ val behavior: SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = book
 val flightStep = new SagaStepAdapter[FlightCommand, FlightEvent, BookingStep, BookingSagaState] {
   override def step: BookingStep = BookingStep.Flight
   override def start(id: UUID, state: BookingSagaState, correlationId: UUID): FlightCommand =
-    FlightCommand.InitSearch(id, FlightQuery(state.fromCity, state.toCity, state.fromDate, state.toDate), correlationId)
+    FlightCommand.InitSearch(id, FlightQuery(state.fromCity, state.toCity, state.fromDate, state.toDate), correlationId, state.flow)
   override def compensate(id: UUID): FlightCommand = FlightCommand.Cancel(id)
   override def classify(event: FlightEvent): Option[(SagaPhase, SagaStepResult)] =
     SagaStepAdapter.classifyReserveSearch(
@@ -345,7 +417,7 @@ val flightStep = new SagaStepAdapter[FlightCommand, FlightEvent, BookingStep, Bo
 val carStep = new SagaStepAdapter[CarCommand, CarEvent, BookingStep, BookingSagaState] {
   override def step: BookingStep = BookingStep.Car
   override def start(id: UUID, state: BookingSagaState, correlationId: UUID): CarCommand =
-    CarCommand.InitSearch(id, CarQuery(state.toCity, state.fromDate, state.toDate), correlationId)
+    CarCommand.InitSearch(id, CarQuery(state.toCity, state.fromDate, state.toDate), correlationId, state.flow)
   override def compensate(id: UUID): CarCommand = CarCommand.Cancel(id)
   override def classify(event: CarEvent): Option[(SagaPhase, SagaStepResult)] =
     SagaStepAdapter.classifyReserveSearch(
@@ -358,7 +430,7 @@ val carStep = new SagaStepAdapter[CarCommand, CarEvent, BookingStep, BookingSaga
 val hotelStep = new SagaStepAdapter[HotelCommand, HotelEvent, BookingStep, BookingSagaState] {
   override def step: BookingStep = BookingStep.Hotel
   override def start(id: UUID, state: BookingSagaState, correlationId: UUID): HotelCommand =
-    HotelCommand.InitSearch(id, HotelQuery(state.toCity, state.fromDate, state.toDate), correlationId)
+    HotelCommand.InitSearch(id, HotelQuery(state.toCity, state.fromDate, state.toDate), correlationId, state.flow)
   override def compensate(id: UUID): HotelCommand = HotelCommand.Cancel(id)
   override def classify(event: HotelEvent): Option[(SagaPhase, SagaStepResult)] =
     SagaStepAdapter.classifyReserveSearch(
@@ -392,8 +464,8 @@ private def serviceFSM[F[_]: Applicative, Cmd, Evt <: SagaCorrelated](
     .label(label)
 
 private def serviceNetwork[F[_]: Applicative](
-  services:  BookingServices[F],
-  machines:  BookingMachines[F]
+  services: BookingServices[F],
+  machines: BookingMachines[F]
 ): Apparatus[F, SagaEvent[BookingStep, BookingSagaState], List[BookingCommand]] =
   serviceFSM(flightStep, machines.flight, flightSearchConnector(services.flight), "Flight service")
     .merge(serviceFSM(carStep, machines.car, carSearchConnector(services.car), "Car service"))
@@ -408,6 +480,16 @@ private def bookingOrchestratorLoop[F[_]: Applicative](
     .aggregateMachine[F, BookingCommand, SagaEvent[BookingStep, BookingSagaState]](booking, _.id)
     .feedbackMany(serviceNetwork(services, machines))
 
+private def serviceCommandLoop[F[_]: Applicative, Cmd, Evt <: SagaCorrelated](
+  adapter:   SagaStepAdapter[Cmd, Evt, BookingStep, BookingSagaState],
+  machine:   Apparatus[F, Cmd, List[Evt]],
+  connector: Apparatus[F, Evt, List[Cmd]],
+  loop:      Apparatus[F, List[BookingCommand], List[SagaEvent[BookingStep, BookingSagaState]]]
+): Apparatus[F, Cmd, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  adapter
+    .rmap(machine.feedback(connector), BookingCommand.advanceCodec)
+    .andThen(loop)
+
 def saga[F[_]: Applicative](
   bookingServices: BookingServices[F],
   sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
@@ -421,20 +503,59 @@ def saga[F[_]: Applicative](
 ): Apparatus[F, BookingCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
   bookingOrchestratorLoop(sagaBehavior.decider, bookingServices, machines).lmap(List(_))
 
-def sagaRerootedAtCar[F[_]: Applicative](
-  booking:         BookingDecider,
-  bookingServices: BookingServices[F]
-): Apparatus[F, CarCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
-  sagaRerootedAtCar(booking, bookingServices, BookingMachines.default[F])
-
-def sagaRerootedAtCar[F[_]: Applicative](
-  booking:         BookingDecider,
+/** Car sub-aggregate entry into the booking orchestrator (e.g. async license verification). */
+def carSaga[F[_]: Applicative](
   bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
+): Apparatus[F, CarCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  carSaga(bookingServices, sagaBehavior, BookingMachines.default[F])
+
+def carSaga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState],
   machines:        BookingMachines[F]
 ): Apparatus[F, CarCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
-  carStep
-    .rmap(
-      machines.car.feedback(carSearchConnector(bookingServices.car)),
-      BookingCommand.advanceCodec
-    )
-    .andThen(bookingOrchestratorLoop(booking, bookingServices, machines))
+  serviceCommandLoop(
+    carStep,
+    machines.car,
+    carSearchConnector(bookingServices.car),
+    bookingOrchestratorLoop(sagaBehavior.decider, bookingServices, machines)
+  )
+
+/** Hotel sub-aggregate entry into the booking orchestrator (e.g. async background check). */
+def hotelSaga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
+): Apparatus[F, HotelCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  hotelSaga(bookingServices, sagaBehavior, BookingMachines.default[F])
+
+def hotelSaga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState],
+  machines:        BookingMachines[F]
+): Apparatus[F, HotelCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  serviceCommandLoop(
+    hotelStep,
+    machines.hotel,
+    hotelSearchConnector(bookingServices.hotel),
+    bookingOrchestratorLoop(sagaBehavior.decider, bookingServices, machines)
+  )
+
+/** Flight sub-aggregate entry into the booking orchestrator (e.g. async clearance check). */
+def flightSaga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
+): Apparatus[F, FlightCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  flightSaga(bookingServices, sagaBehavior, BookingMachines.default[F])
+
+def flightSaga[F[_]: Applicative](
+  bookingServices: BookingServices[F],
+  sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState],
+  machines:        BookingMachines[F]
+): Apparatus[F, FlightCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
+  serviceCommandLoop(
+    flightStep,
+    machines.flight,
+    flightSearchConnector(bookingServices.flight),
+    bookingOrchestratorLoop(sagaBehavior.decider, bookingServices, machines)
+  )

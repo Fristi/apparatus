@@ -5,7 +5,6 @@ import apparatus.core.patterns.{SagaEvent, SagaState, SagaStepResult}
 import apparatus.examples.*
 import apparatus.{EventStore, PostgresEventStore}
 import cats.data.NonEmptyList
-import cats.data.NonEmptySet
 import cats.effect.IO
 import cats.implicits.*
 import com.dimafeng.testcontainers.PostgreSQLContainer
@@ -14,8 +13,6 @@ import doobie.*
 import doobie.implicits.*
 import munit.CatsEffectSuite
 import org.testcontainers.utility.DockerImageName
-
-import java.util.UUID
 
 class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
 
@@ -38,10 +35,14 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
       logHandler = None
     )
 
-  val createSchema: ConnectionIO[Unit] =
-    PostgresEventStore.create().void
+  /** Fresh schema plus empty event store — required because TestContainersForAll shares one DB across tests. */
+  val resetStore: ConnectionIO[Unit] =
+    for
+      _ <- PostgresEventStore.create()
+      _ <- sql"TRUNCATE eventstreams".update.run.void
+    yield ()
 
-  private def runCommand(
+  private def runBookingCommand(
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: BookingCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
@@ -49,12 +50,36 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 
-  test("happy path: all steps complete in order") {
+  private def runCarCommand(
+    xa:              Transactor[IO],
+    bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
+  )(cmd: CarCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
+    val prg = carSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val mat = EventStore.deciderMaterializer(PostgresEventStore)
+    Apparatus.runA(prg, cmd, mat).transact(xa)
+
+  private def runHotelCommand(
+    xa:              Transactor[IO],
+    bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
+  )(cmd: HotelCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
+    val prg = hotelSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val mat = EventStore.deciderMaterializer(PostgresEventStore)
+    Apparatus.runA(prg, cmd, mat).transact(xa)
+
+  private def runFlightCommand(
+    xa:              Transactor[IO],
+    bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
+  )(cmd: FlightCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
+    val prg = flightSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val mat = EventStore.deciderMaterializer(PostgresEventStore)
+    Apparatus.runA(prg, cmd, mat).transact(xa)
+
+  test("civilian happy path: all steps complete in one command") {
     withContainers { c =>
       val xa = makeTransactor(c)
       for
-        _      <- createSchema.transact(xa)
-        events <- runCommand(xa)(BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState))
+        _      <- resetStore.transact(xa)
+        events <- runBookingCommand(xa)(BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState))
       yield assertEquals(
         events,
         List(
@@ -71,5 +96,77 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
           SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Completed)
         )
       )
+    }
+  }
+
+  test("diplomat happy path: async verification commands drive each step") {
+    withContainers { c =>
+      val xa = makeTransactor(c)
+      for
+        _           <- resetStore.transact(xa)
+        startEvents <- runBookingCommand(xa)(BookingCommand.Start(BookingDomain.bookingId, BookingDomain.diplomatSagaState))
+        _ = assertEquals(
+          startEvents,
+          List(
+            SagaEvent.Booted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, NonEmptyList.of(
+              SagaState.StepDispatch(BookingStep.Hotel, BookingDomain.hotelId),
+              SagaState.StepDispatch(BookingStep.Car, BookingDomain.carId),
+              SagaState.StepDispatch(BookingStep.Flight, BookingDomain.flightId)
+            )),
+            SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, BookingStep.Hotel, BookingDomain.hotelId)
+          )
+        )
+        hotelEvents <- runHotelCommand(xa)(HotelCommand.VerifyBackgroundCheck(BookingDomain.hotelId))
+        _ = assertEquals(
+          hotelEvents,
+          List(
+            SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Hotel, SagaStepResult.Completed),
+            SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, BookingStep.Car, BookingDomain.carId)
+          )
+        )
+        carEvents <- runCarCommand(xa)(CarCommand.VerifyDriverLicense(BookingDomain.carId))
+        _ = assertEquals(
+          carEvents,
+          List(
+            SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Car, SagaStepResult.Completed),
+            SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, BookingStep.Flight, BookingDomain.flightId)
+          )
+        )
+        flightEvents <- runFlightCommand(xa)(FlightCommand.VerifyClearance(BookingDomain.flightId))
+      yield assertEquals(
+        flightEvents,
+        List(SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Completed))
+      )
+    }
+  }
+
+  test("diplomat car license rejected: hotel compensated after async car step fails") {
+    withContainers { c =>
+      val xa = makeTransactor(c)
+      for
+        _      <- resetStore.transact(xa)
+        _      <- runBookingCommand(xa)(BookingCommand.Start(BookingDomain.bookingId, BookingDomain.diplomatSagaState))
+        _      <- runHotelCommand(xa)(HotelCommand.VerifyBackgroundCheck(BookingDomain.hotelId))
+        events <- runCarCommand(xa)(CarCommand.RejectDriverLicense(BookingDomain.carId))
+      yield
+        assert(events.contains(SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Car, SagaStepResult.Failed)))
+        assert(events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
+        assert(!events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Flight, _) => true; case _ => false })
+    }
+  }
+
+  test("diplomat flight clearance rejected: car and hotel compensated") {
+    withContainers { c =>
+      val xa = makeTransactor(c)
+      for
+        _      <- resetStore.transact(xa)
+        _      <- runBookingCommand(xa)(BookingCommand.Start(BookingDomain.bookingId, BookingDomain.diplomatSagaState))
+        _      <- runHotelCommand(xa)(HotelCommand.VerifyBackgroundCheck(BookingDomain.hotelId))
+        _      <- runCarCommand(xa)(CarCommand.VerifyDriverLicense(BookingDomain.carId))
+        events <- runFlightCommand(xa)(FlightCommand.RejectClearance(BookingDomain.flightId))
+      yield
+        assert(events.contains(SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Failed)))
+        assert(events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Car, SagaStepResult.Completed) => true; case _ => false })
+        assert(events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
     }
   }

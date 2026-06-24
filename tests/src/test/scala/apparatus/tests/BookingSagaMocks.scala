@@ -49,7 +49,6 @@ object BookingSagaMocks:
   def defaultServices[F[_]: Applicative]: BookingServices[F] =
     services(new MockFlightService[F](), new MockCarService[F](), new MockHotelService[F]())
 
-  /** Simulates a failed flight search (no offers). */
   def failingFlightSearch[F[_]: Applicative]: BookingServices[F] =
     services(
       new MockFlightService[F](failOnFlightNumber = Some("BA123")),
@@ -57,7 +56,6 @@ object BookingSagaMocks:
       new MockHotelService[F]()
     )
 
-  /** Simulates a failed car search (no offers). */
   def failingCarSearch[F[_]: Applicative]: BookingServices[F] =
     services(
       new MockFlightService[F](),
@@ -65,19 +63,9 @@ object BookingSagaMocks:
       new MockHotelService[F]()
     )
 
-  /** Simulates a failed hotel search (no offers). */
   def failingHotelSearch[F[_]: Applicative]: BookingServices[F] =
     services(
       new MockFlightService[F](),
       new MockCarService[F](),
       new MockHotelService[F](failOnHotelName = Some("Grand Hotel"))
-    )
-
-  /** Hotel sub-aggregate already reserved (for rerooted saga scenarios). */
-  def hotelReservedMachine[F[_]: Applicative]: Apparatus[F, HotelCommand, List[HotelEvent]] =
-    hotelMachine(
-      hotelDecider.evolveFrom(List(
-        HotelEvent.SearchStarted(BookingDomain.hotelId, BookingDomain.bookingId, BookingDomain.hotelQuery),
-        HotelEvent.Reserved(BookingDomain.hotelId, BookingDomain.bookingId)
-      ))
     )
