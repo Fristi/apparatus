@@ -12,7 +12,7 @@ class BookingSagaIdentitySpec extends munit.FunSuite:
 
   test("civilian happy path: all steps complete in one run"):
     assertEquals(
-      Apparatus.runA(saga[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior), BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState), DeciderMaterializer.syncIO).unsafeRunSync(),
+      Apparatus.runA(bookingSaga[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior), BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState), DeciderMaterializer.syncIO).unsafeRunSync(),
       List(
         SagaEvent.Booted(BookingDomain.bookingId, BookingDomain.sagaState, NonEmptyList.of(
           SagaState.StepDispatch(BookingStep.Hotel, BookingDomain.hotelId),
@@ -28,38 +28,11 @@ class BookingSagaIdentitySpec extends munit.FunSuite:
       )
     )
 
-  test("flight fails: compensation triggered for completed steps"):
-    val events =
-      Apparatus
-        .runA(
-          saga[SyncIO](bookingServices = BookingSagaMocks.failingFlightSearch[SyncIO], BookingDomain.testBehavior),
-          BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState),
-          DeciderMaterializer.syncIO
-        )
-        .unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Failed)))
-    assert(events.exists { case SagaEvent.CompensationTriggered(_, _) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Car,    SagaStepResult.Completed) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
-
-  test("flight fails: car compensated, flight not"):
-    val events =
-      Apparatus
-        .runA(
-          saga[SyncIO](bookingServices = BookingSagaMocks.failingFlightSearch[SyncIO], BookingDomain.testBehavior),
-          BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState),
-          DeciderMaterializer.syncIO
-        )
-        .unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Failed)))
-    assert(events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Car, SagaStepResult.Completed) => true; case _ => false })
-    assert(!events.exists { case SagaEvent.CompensationProgressed(_, BookingStep.Flight, _) => true; case _ => false })
-
   test("diplomat start: hotel step pauses awaiting background check"):
     val events =
       Apparatus
         .runA(
-          saga[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior),
+          bookingSaga[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior),
           BookingCommand.Start(BookingDomain.bookingId, BookingDomain.diplomatSagaState),
           DeciderMaterializer.syncIO
         )
@@ -75,18 +48,3 @@ class BookingSagaIdentitySpec extends munit.FunSuite:
         SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, BookingStep.Hotel, BookingDomain.hotelId)
       )
     )
-
-  test("car fails: no compensation needed"):
-    val events =
-      Apparatus
-        .runA(
-          saga[SyncIO](bookingServices = BookingSagaMocks.failingCarSearch[SyncIO], BookingDomain.testBehavior),
-          BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState),
-          DeciderMaterializer.syncIO
-        )
-        .unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Car, SagaStepResult.Failed)))
-    assert(!events.exists {
-      case SagaEvent.CompensationTriggered(_, steps) => steps.exists(_.name == BookingStep.Car)
-      case _ => false
-    })

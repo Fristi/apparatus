@@ -2,6 +2,7 @@ package apparatus.tests
 
 import apparatus.core.patterns.{SagaBehavior, SagaStepCorrelationIdGenerator}
 import apparatus.examples.*
+import apparatus.examples.saga.{CarQuery, FlightQuery, HotelQuery}
 
 import java.time.LocalDate
 import java.util.UUID

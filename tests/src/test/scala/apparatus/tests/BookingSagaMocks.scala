@@ -3,6 +3,7 @@ package apparatus.tests
 import apparatus.core.*
 import apparatus.core.machines.evolveFrom
 import apparatus.examples.*
+import apparatus.examples.saga.*
 import cats.Applicative
 import cats.implicits.*
 

@@ -2,6 +2,7 @@ package apparatus.tests
 
 import apparatus.core.patterns.*
 import apparatus.examples.*
+import apparatus.examples.saga.*
 import cats.data.NonEmptyList
 import munit.FunSuite
 import zio.blocks.schema.*

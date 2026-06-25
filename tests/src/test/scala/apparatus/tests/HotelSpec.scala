@@ -1,6 +1,7 @@
 package apparatus.tests
 
-import apparatus.examples.*
+import apparatus.examples.BookingFlow
+import apparatus.examples.saga.*
 import munit.FunSuite
 
 class HotelSpec extends FunSuite:

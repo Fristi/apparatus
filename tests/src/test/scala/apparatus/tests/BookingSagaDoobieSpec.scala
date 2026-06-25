@@ -3,6 +3,7 @@ package apparatus.tests
 import apparatus.core.*
 import apparatus.core.patterns.{SagaEvent, SagaState, SagaStepResult}
 import apparatus.examples.*
+import apparatus.examples.saga.*
 import apparatus.{EventStore, PostgresEventStore}
 import cats.data.NonEmptyList
 import cats.effect.IO
@@ -46,7 +47,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: BookingCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
-    val prg = saga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val prg = bookingSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 
