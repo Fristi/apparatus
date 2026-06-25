@@ -12,7 +12,7 @@ class BookingSagaIdentitySpec extends munit.FunSuite:
 
   test("civilian happy path: all steps complete in one run"):
     assertEquals(
-      Apparatus.runA(bookingSaga[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior), BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState), DeciderMaterializer.syncIO).unsafeRunSync(),
+      Apparatus.runA(bookingEntrypoint[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior), BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState), DeciderMaterializer.syncIO).unsafeRunSync(),
       List(
         SagaEvent.Booted(BookingDomain.bookingId, BookingDomain.sagaState, NonEmptyList.of(
           SagaState.StepDispatch(BookingStep.Hotel, BookingDomain.hotelId),
@@ -32,7 +32,7 @@ class BookingSagaIdentitySpec extends munit.FunSuite:
     val events =
       Apparatus
         .runA(
-          bookingSaga[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior),
+          bookingEntrypoint[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior),
           BookingCommand.Start(BookingDomain.bookingId, BookingDomain.diplomatSagaState),
           DeciderMaterializer.syncIO
         )

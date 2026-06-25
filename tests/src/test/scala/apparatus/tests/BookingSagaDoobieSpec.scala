@@ -47,7 +47,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: BookingCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
-    val prg = bookingSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val prg = bookingEntrypoint[ConnectionIO](bookingServices, BookingDomain.testBehavior)
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 
@@ -55,7 +55,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: CarCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
-    val prg = carSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val prg = carEntrypoint[ConnectionIO](bookingServices, BookingDomain.testBehavior)
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 
@@ -63,7 +63,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: HotelCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
-    val prg = hotelSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val prg = hotelEntrypoint[ConnectionIO](bookingServices, BookingDomain.testBehavior)
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 
@@ -71,7 +71,7 @@ class BookingSagaDoobieSpec extends CatsEffectSuite with TestContainersForAll:
     xa:              Transactor[IO],
     bookingServices: BookingServices[ConnectionIO] = BookingServices.default[ConnectionIO]
   )(cmd: FlightCommand): IO[List[SagaEvent[BookingStep, BookingSagaState]]] =
-    val prg = flightSaga[ConnectionIO](bookingServices, BookingDomain.testBehavior)
+    val prg = flightEntrypoint[ConnectionIO](bookingServices, BookingDomain.testBehavior)
     val mat = EventStore.deciderMaterializer(PostgresEventStore)
     Apparatus.runA(prg, cmd, mat).transact(xa)
 

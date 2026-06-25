@@ -24,12 +24,7 @@ enum BookingFlow derives Eq, Schema:
   case Civilian
   case Diplomat
 
-
-final case class BookingServices[F[_]](
-  flight: FlightService[F],
-  car:    CarService[F],
-  hotel:  HotelService[F]
-)
+final case class BookingServices[F[_]](flight: FlightService[F], car: CarService[F], hotel: HotelService[F])
 
 object BookingServices:
   def default[F[_]: Applicative]: BookingServices[F] =
@@ -40,13 +35,7 @@ object BookingServices:
 sealed trait BookingCommand:
   val id: UUID
 
-final case class BookingSagaState(
-  fromCity: String,
-  toCity: String,
-  fromDate: LocalDate,
-  toDate: LocalDate,
-  flow: BookingFlow = BookingFlow.Civilian
-) derives Schema
+final case class BookingSagaState(fromCity: String, toCity: String, fromDate: LocalDate, toDate: LocalDate, flow: BookingFlow) derives Schema
 
 object BookingCommand:
   case class Start(id: UUID, state: BookingSagaState) extends BookingCommand
@@ -158,14 +147,14 @@ private def serviceCommandLoop[F[_]: Applicative, Cmd, Evt <: SagaCorrelated](
     .rmap(machine.feedback(connector), BookingCommand.advanceCodec)
     .andThen(loop)
 
-def bookingSaga[F[_]: Applicative](
+def bookingEntrypoint[F[_]: Applicative](
   bookingServices: BookingServices[F],
   sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
 ): Apparatus[F, BookingCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
   bookingOrchestratorLoop(sagaBehavior.decider, bookingServices).lmap(List(_))
 
 /** Car sub-aggregate entry into the booking orchestrator (e.g. async license verification). */
-def carSaga[F[_]: Applicative](
+def carEntrypoint[F[_]: Applicative](
   bookingServices: BookingServices[F],
   sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
 ): Apparatus[F, CarCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
@@ -177,7 +166,7 @@ def carSaga[F[_]: Applicative](
   )
 
 /** Hotel sub-aggregate entry into the booking orchestrator (e.g. async background check). */
-def hotelSaga[F[_]: Applicative](
+def hotelEntrypoint[F[_]: Applicative](
   bookingServices: BookingServices[F],
   sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
 ): Apparatus[F, HotelCommand, List[SagaEvent[BookingStep, BookingSagaState]]] =
@@ -189,7 +178,7 @@ def hotelSaga[F[_]: Applicative](
   )
 
 /** Flight sub-aggregate entry into the booking orchestrator (e.g. async clearance check). */
-def flightSaga[F[_]: Applicative](
+def flightEntrypoint[F[_]: Applicative](
   bookingServices: BookingServices[F],
   sagaBehavior:    SagaBehavior[BookingCommand, BookingStep, BookingSagaState] = behavior
 ): Apparatus[F, FlightCommand, List[SagaEvent[BookingStep, BookingSagaState]]] = {
