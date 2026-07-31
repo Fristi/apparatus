@@ -19,6 +19,8 @@ docs/**/*.md
 .scala_dependencies
 .worksheet
 /.bsp/
+.metals/
+.bloop/
 
 # Node / VitePress
 node_modules/
