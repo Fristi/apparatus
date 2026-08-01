@@ -11,8 +11,15 @@ cs install --contrib cellar
 echo "==> Installing npm dependencies (VitePress)"
 npm ci
 
-echo "==> Warming sbt (downloads launcher + project deps)"
-sbt --batch -Dsbt.supershell=false "exit"
+echo "==> Warming sbt (launcher, project deps, and a remote cache pull)"
+if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+  echo "    BuildBuddy remote cache enabled"
+else
+  echo "    BUILDBUDDY_API_KEY unset — local disk cache only"
+fi
+# Non-fatal: an unreachable cache or a compile error should not fail container creation.
+sbt --batch -Dsbt.supershell=false "core/compile; doobie/compile" \
+  || echo "    warning: warm-up build failed; run 'sbt core/compile' manually"
 
 echo "==> Dev container ready"
 echo "    Scala tests:  sbt tests/test"

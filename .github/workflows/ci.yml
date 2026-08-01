@@ -28,6 +28,8 @@ jobs:
 
       - name: Run tests
         run: sbt "core/test; doobie/test"
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   site-build:
     runs-on: ubuntu-latest
@@ -64,6 +66,7 @@ jobs:
         run: sbt docs/mdoc
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Install npm deps
         run: npm ci
