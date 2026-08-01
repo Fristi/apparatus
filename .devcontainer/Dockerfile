@@ -19,11 +19,15 @@ RUN DOCKER_ARCH="$( [ "${TARGETARCH}" = "arm64" ] && echo aarch64 || echo x86_64
   && groupadd -f docker \
   && usermod -aG docker vscode
 
+# Login shells reset PATH from /etc/profile, so the image-wide ENV below is not
+# enough for terminals — profile.d restores it for bash and zsh alike.
+RUN echo 'export PATH="$HOME/.local/share/coursier/bin:$PATH"' \
+      > /etc/profile.d/coursier.sh
+
 USER vscode
 ENV COURSIER_BIN_DIR=/home/vscode/.local/share/coursier/bin
 ENV PATH="${COURSIER_BIN_DIR}:${PATH}"
 RUN cs install sbt metals scala-cli \
-  && printf '\nexport PATH="$HOME/.local/share/coursier/bin:$PATH"\n' >> /home/vscode/.bashrc \
-  && printf '\nexport PATH="$HOME/.local/share/coursier/bin:$PATH"\n' >> /home/vscode/.zshrc
+  && cs install --contrib cellar
 
 USER root
