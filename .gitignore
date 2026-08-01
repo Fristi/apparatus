@@ -22,6 +22,16 @@ docs/**/*.md
 .metals/
 .bloop/
 
+# Metals writes these with a dynamic MCP port per session
+.mcp.json
+.vscode/mcp.json
+.cursor/mcp.json
+
+# cellar: keep the committed telemetry opt-out, ignore the local classpath cache
+.cellar/*
+!.cellar/cellar.conf
+!.cellar/.telemetry-seen
+
 # Node / VitePress
 node_modules/
 docs/.vitepress/dist/

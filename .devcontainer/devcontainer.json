@@ -22,8 +22,12 @@
         "scala-lang.scala"
       ],
       "settings": {
-        "metals.javaHome": "/usr/local/sdkman/candidates/java/current",
-        "metals.sbtScript": "sbt",
+        "metals.javaHome": "/usr/lib/jvm/msopenjdk-current",
+        "metals.sbtScript": "/home/vscode/.local/share/coursier/bin/sbt",
+        "metals.defaultBspToBuildTool": true,
+        "metals.autoImportBuilds": "all",
+        "metals.startMcpServer": true,
+        "chat.mcp.enabled": true,
         "files.watcherExclude": {
           "**/target/**": true,
           "**/node_modules/**": true,
