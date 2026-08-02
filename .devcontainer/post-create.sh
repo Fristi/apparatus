@@ -13,7 +13,7 @@ log "Checking Coursier apps (sbt, metals, scala-cli, cellar)"
 for app in sbt metals scala-cli; do
   command -v "$app" >/dev/null || cs install "$app"
 done
-command -v cellar >/dev/null || cs install --contrib cellar
+# command -v cellar >/dev/null || cs install --contrib cellar
 
 log "Installing npm dependencies (VitePress)"
 npm ci --no-audit --no-fund
