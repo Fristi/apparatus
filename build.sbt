@@ -1,13 +1,13 @@
 ThisBuild / organization         := "io.github.fristi"
 ThisBuild / organizationName     := "Fristi"
-ThisBuild / licenses             := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
-ThisBuild / homepage             := Some(url("https://github.com/Fristi/apparatus"))
+ThisBuild / licenses             := List("Apache-2.0" -> uri("https://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / homepage             := Some(uri("https://github.com/Fristi/apparatus"))
 ThisBuild / developers           := List(
-  Developer("Fristi", "Mark de Jong", "av3ng3r@gmail.com", url("https://github.com/Fristi"))
+  Developer("Fristi", "Mark de Jong", "av3ng3r@gmail.com", uri("https://github.com/Fristi"))
 )
 ThisBuild / versionScheme          := Some("early-semver")
 ThisBuild / scmInfo                := Some(
-  ScmInfo(url("https://github.com/Fristi/apparatus"), "scm:git@github.com:Fristi/apparatus.git")
+  ScmInfo(uri("https://github.com/Fristi/apparatus"), "scm:git@github.com:Fristi/apparatus.git")
 )
 ThisBuild / publishTo              := {
   val centralSnapshots = "https://central.sonatype.com/repository/maven-snapshots/"
@@ -26,8 +26,8 @@ lazy val buildBuddyApiKey: Option[String] = {
   sys.env.get("BUILDBUDDY_API_KEY").orElse(fromFile).map(_.trim).filter(_.nonEmpty)
 }
 
-// Must match the Organization URL under BuildBuddy settings.
-lazy val buildBuddyCacheUri = uri("grpcs://apparatus.buildbuddy.io")
+// Must match the Organization uri under BuildBuddy settings.
+lazy val buildBuddyCacheUri = uri("grpcs://vectos.buildbuddy.io")
 
 Global / remoteCache        := buildBuddyApiKey.map(_ => buildBuddyCacheUri)
 Global / remoteCacheHeaders ++= buildBuddyApiKey.map(key => s"x-buildbuddy-api-key=$key").toSeq
