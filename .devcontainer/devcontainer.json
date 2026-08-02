@@ -18,6 +18,9 @@
   "runArgs": [
     "--add-host=host.docker.internal:host-gateway"
   ],
+  // Only honoured when VS Code itself opens the dev container. Clients that build
+  // this file some other way — Envbuilder on Coder, JetBrains Gateway — drop this
+  // block, so the editor-agnostic half of the setup lives in .vscode/ instead.
   "customizations": {
     "vscode": {
       "extensions": [
@@ -26,17 +29,7 @@
       ],
       "settings": {
         "metals.javaHome": "/usr/lib/jvm/msopenjdk-current",
-        "metals.sbtScript": "/home/vscode/.local/share/coursier/bin/sbt",
-        "metals.defaultBspToBuildTool": true,
-        "metals.autoImportBuilds": "all",
-        "metals.startMcpServer": true,
-        "chat.mcp.enabled": true,
-        "files.watcherExclude": {
-          "**/target/**": true,
-          "**/node_modules/**": true,
-          "**/.metals/**": true,
-          "**/.bloop/**": true
-        }
+        "metals.sbtScript": "/home/vscode/.local/share/coursier/bin/sbt"
       }
     }
   },

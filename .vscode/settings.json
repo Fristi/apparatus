@@ -1,0 +1,12 @@
+{
+  "metals.defaultBspToBuildTool": true,
+  "metals.autoImportBuilds": "all",
+  "metals.startMcpServer": true,
+  "chat.mcp.enabled": true,
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/node_modules/**": true,
+    "**/.metals/**": true,
+    "**/.bloop/**": true
+  }
+}

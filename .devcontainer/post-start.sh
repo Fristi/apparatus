@@ -26,6 +26,22 @@ sudo chown -R vscode:vscode \
 
 # Mirror the injected key to disk so clients that attach without Coder's
 # environment (plain devcontainer CLI, JetBrains Gateway) still get cache hits.
+# Envbuilder (Coder) bakes this dev container into the workspace pod itself and
+# rebuilds the image on every start, so only /workspaces survives. VS Code then
+# arrives over plain Remote-SSH and installs its server into $HOME, which would
+# mean re-installing Metals after each restart.
+if [[ -d /.envbuilder && -d /workspaces ]]; then
+  log "Persisting the VS Code server on /workspaces"
+  PERSISTED=/workspaces/.vscode-server
+  SERVER_HOME="${HOME:-/root}/.vscode-server"
+  mkdir -p "$PERSISTED"
+  if [[ -e "$SERVER_HOME" && ! -L "$SERVER_HOME" ]]; then
+    cp -a "$SERVER_HOME/." "$PERSISTED/"
+    rm -rf "$SERVER_HOME"
+  fi
+  ln -sfn "$PERSISTED" "$SERVER_HOME"
+fi
+
 CREDENTIAL_FILE=/home/vscode/.config/sbt/buildbuddy_credential.txt
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   umask 077

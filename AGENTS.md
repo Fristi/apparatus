@@ -56,9 +56,7 @@ hits` means nothing was recompiled. To confirm the remote half is doing the
 work, delete `~/.cache/sbt/v2` and build again; hits after that can only be
 coming from BuildBuddy.
 
-On Coder, the key reaches the container through the workspace agent, which is
-the process that runs `devcontainer up`, so `${localEnv:BUILDBUDDY_API_KEY}` in
-`containerEnv` resolves against it:
+On Coder the key comes from `coder_agent.env`:
 
 ```terraform
 variable "buildbuddy_api_key" {
@@ -72,18 +70,46 @@ resource "coder_agent" "dev" {
   }
   # ...
 }
-
-resource "coder_devcontainer" "apparatus" {
-  count            = data.coder_workspace.me.start_count
-  agent_id         = coder_agent.dev.id
-  workspace_folder = "/home/coder/apparatus"
-}
 ```
 
-A `coder_env` resource on `coder_devcontainer.apparatus[0].subagent_id` is the
-alternative, but it only covers processes the subagent spawns, and attaching it
-makes the dev container terraform-managed, which drops any custom `apps` from
-`devcontainer.json`.
+That covers everything the agent spawns — terminals, the VS Code server, and the
+sbt that Metals starts over BSP — so ordinary work gets remote cache hits. It does
+*not* cover the warm-up compile in `post-create.sh`, which runs before the agent
+exists (see below); that one falls back to the local disk cache, and the
+credential file `post-start.sh` mirrors is never written there.
+
+## Where the dev container actually runs
+
+`.devcontainer/devcontainer.json` is consumed by three different clients, and
+only one of them honours all of it.
+
+**VS Code Dev Containers**, locally, is the reference implementation: image,
+`containerEnv`, mounts and `customizations.vscode` all apply.
+
+**JetBrains Gateway** builds the image and mounts but drops
+`customizations.vscode` — IDEA supplies its own Scala support, so nothing is lost.
+
+**Coder** runs this workspace through **Envbuilder**, which is not a dev container
+at all. Envbuilder bakes the Dockerfile, the features and `containerEnv` directly
+into the workspace pod, then hands over to the coder agent; VS Code connects
+afterwards over plain Remote-SSH. Four consequences worth knowing:
+
+- `customizations.vscode` is dropped entirely. Editor configuration that has to
+  survive lives in `.vscode/` (`settings.json`, `extensions.json`), which
+  Remote-SSH does read as workspace settings. Keep container-absolute paths such
+  as `metals.javaHome` out of there — the same file is read on a laptop.
+- Only `/workspaces` is a persistent volume; the rest of the pod is rebuilt from
+  cache on every start. `post-start.sh` therefore relocates `~/.vscode-server`
+  onto `/workspaces` so installed extensions survive a restart.
+- Lifecycle scripts run before the agent, so agent-injected environment is absent
+  during `postCreateCommand`, and `${localEnv:...}` in `containerEnv` resolves
+  against nothing.
+- There is no Docker daemon in the pod. `sbt tests/test` and `MermaidRenderSpec`
+  cannot run on Coder; use a local dev container for those.
+
+The checkout is at `/workspaces/apparatus` and the session user is `root`, while
+the toolchain was installed for `vscode` and lives on `PATH` at
+`/home/vscode/.local/share/coursier/bin`.
 
 ## Conventions
 
