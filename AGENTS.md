@@ -56,9 +56,22 @@ hits` means nothing was recompiled. To confirm the remote half is doing the
 work, delete `~/.cache/sbt/v2` and build again; hits after that can only be
 coming from BuildBuddy.
 
-On Coder, the key reaches the container through the workspace agent, which is
-the process that runs `devcontainer up`, so `${localEnv:BUILDBUDDY_API_KEY}` in
-`containerEnv` resolves against it:
+On Coder the key arrives as an environment variable; see below.
+
+## Coder workspaces
+
+Use the Docker-based dev containers integration, **not Envbuilder**. Envbuilder
+transforms the workspace image itself instead of running a container inside the
+workspace, which breaks this setup three ways: `mounts`, `runArgs` and the
+`docker.sock` bind are ignored, so Testcontainers has no daemon and the cache
+volumes never exist; and its Kaniko snapshotter stalls or gets OOM-killed on
+large image layers, which is why the Coursier apps are installed by
+`post-create.sh` rather than baked into the image.
+
+The workspace needs a Docker daemon of its own, the dev containers CLI, and the
+BuildBuddy key on the agent — the agent is the process that runs
+`devcontainer up`, so `${localEnv:BUILDBUDDY_API_KEY}` in `containerEnv`
+resolves against it:
 
 ```terraform
 variable "buildbuddy_api_key" {
@@ -67,10 +80,18 @@ variable "buildbuddy_api_key" {
 }
 
 resource "coder_agent" "dev" {
+  startup_script          = "sudo service docker start"
+  startup_script_behavior = "blocking"
   env = {
     BUILDBUDDY_API_KEY = var.buildbuddy_api_key
   }
   # ...
+}
+
+module "devcontainers-cli" {
+  count    = data.coder_workspace.me.start_count
+  source   = "registry.coder.com/coder/devcontainers-cli/coder"
+  agent_id = coder_agent.dev.id
 }
 
 resource "coder_devcontainer" "apparatus" {
@@ -81,9 +102,9 @@ resource "coder_devcontainer" "apparatus" {
 ```
 
 A `coder_env` resource on `coder_devcontainer.apparatus[0].subagent_id` is the
-alternative, but it only covers processes the subagent spawns, and attaching it
-makes the dev container terraform-managed, which drops any custom `apps` from
-`devcontainer.json`.
+alternative for the key, but it only covers processes the subagent spawns, and
+attaching it makes the dev container terraform-managed, which drops any custom
+`apps` from `devcontainer.json`.
 
 ## Conventions
 

@@ -7,9 +7,10 @@ cd "$(dirname "$0")/.."
 # hung container start is indistinguishable from a slow one.
 log() { printf '==> [%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
-# The image installed these already. Re-running `cs install` still round-trips
-# to Maven Central for metadata, which reads as a silent hang on a slow network.
-log "Checking Coursier apps (sbt, metals, scala-cli, cellar)"
+# Deliberately at runtime rather than in the image: see the Dockerfile. The
+# guards keep restarts cheap, since `cs install` round-trips to Maven Central
+# for metadata even when the binary is already there.
+log "Installing Coursier apps (sbt, metals, scala-cli, cellar)"
 for app in sbt metals scala-cli; do
   command -v "$app" >/dev/null || cs install "$app"
 done

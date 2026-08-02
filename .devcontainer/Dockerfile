@@ -24,10 +24,9 @@ RUN DOCKER_ARCH="$( [ "${TARGETARCH}" = "arm64" ] && echo aarch64 || echo x86_64
 RUN echo 'export PATH="$HOME/.local/share/coursier/bin:$PATH"' \
       > /etc/profile.d/coursier.sh
 
-USER vscode
+# The Coursier apps (sbt, metals, scala-cli, cellar) are installed by
+# post-create.sh instead of here. Baking them in adds ~300 MB across several
+# thousand files — Metals alone is 139 MB over 1885 files — and Envbuilder's
+# Kaniko snapshotter stalls or gets OOM-killed hashing a layer that size.
 ENV COURSIER_BIN_DIR=/home/vscode/.local/share/coursier/bin
 ENV PATH="${COURSIER_BIN_DIR}:${PATH}"
-RUN cs install sbt metals scala-cli \
-  && cs install --contrib cellar
-
-USER root
