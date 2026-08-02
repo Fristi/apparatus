@@ -27,7 +27,7 @@ jobs:
       - uses: sbt/setup-sbt@v1
 
       - name: Run tests
-        run: sbt "core/test; doobie/test"
+        run: sbt "test"
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
 
