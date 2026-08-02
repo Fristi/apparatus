@@ -98,9 +98,11 @@ afterwards over plain Remote-SSH. Four consequences worth knowing:
   survive lives in `.vscode/` (`settings.json`, `extensions.json`), which
   Remote-SSH does read as workspace settings. Keep container-absolute paths such
   as `metals.javaHome` out of there — the same file is read on a laptop.
-- Only `/workspaces` is a persistent volume; the rest of the pod is rebuilt from
-  cache on every start. `post-start.sh` therefore relocates `~/.vscode-server`
-  onto `/workspaces` so installed extensions survive a restart.
+- Only `/workspaces` is a persistent volume, the rest of the pod is rebuilt from
+  cache on every start, and recreating the workspace wipes the volume as well.
+  `post-start.sh` therefore relocates `~/.vscode-server` onto `/workspaces` to
+  survive a restart, and seeds it from `/opt/vscode-extensions` — baked into the
+  image by the Dockerfile — to survive a recreate.
 - Lifecycle scripts run before the agent, so agent-injected environment is absent
   during `postCreateCommand`, and `${localEnv:...}` in `containerEnv` resolves
   against nothing.
@@ -110,6 +112,25 @@ afterwards over plain Remote-SSH. Four consequences worth knowing:
 The checkout is at `/workspaces/apparatus` and the session user is `root`, while
 the toolchain was installed for `vscode` and lives on `PATH` at
 `/home/vscode/.local/share/coursier/bin`.
+
+Open `/workspaces/apparatus`, never its parent `/workspaces`. With the parent as
+the window root, `.vscode/settings.json` is out of scope, and the settings below
+are what keep Metals working — Metals still finds the build one level down and
+imports it with the wrong strategy, which fails in a way that looks like Metals
+being absent.
+
+## Metals uses sbt's BSP server, not Bloop
+
+Metals defaults to Bloop, which it sets up by writing `project/metals.sbt` to add
+`sbt-bloop`. There is no sbt 2 build of that plugin, so the injection breaks the
+build outright — `compiler-interface` 2.0.4 against 1.10.7 — and `bloopInstall`
+is then not a valid command. `metals.defaultBspToBuildTool` in
+`.vscode/settings.json` is what avoids this: sbt 2 speaks BSP itself and already
+advertises it through `.bsp/sbt.json`.
+
+If a build starts failing on that version conflict, delete `project/metals.sbt`,
+`project/project/` and `project/.bloop` — they are leftovers from a Metals
+session that fell back to Bloop.
 
 ## Conventions
 

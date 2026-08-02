@@ -21,6 +21,10 @@ docs/**/*.md
 /.bsp/
 .metals/
 .bloop/
+# Metals writes these to add sbt-bloop; the plugin has no sbt 2 build, so Metals
+# must be kept on sbt's own BSP server instead (metals.defaultBspToBuildTool).
+project/metals.sbt
+project/project/metals.sbt
 
 # Metals writes these with a dynamic MCP port per session
 .mcp.json

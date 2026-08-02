@@ -28,18 +28,32 @@ sudo chown -R vscode:vscode \
 # environment (plain devcontainer CLI, JetBrains Gateway) still get cache hits.
 # Envbuilder (Coder) bakes this dev container into the workspace pod itself and
 # rebuilds the image on every start, so only /workspaces survives. VS Code then
-# arrives over plain Remote-SSH and installs its server into $HOME, which would
-# mean re-installing Metals after each restart.
+# arrives over plain Remote-SSH, which reads no part of customizations.vscode, so
+# nothing here is set up on its behalf unless we do it.
 if [[ -d /.envbuilder && -d /workspaces ]]; then
+  SERVER_HOME="${HOME:-/root}/.vscode-server"
+
+  # Keep the server and its extensions across a restart.
   log "Persisting the VS Code server on /workspaces"
   PERSISTED=/workspaces/.vscode-server
-  SERVER_HOME="${HOME:-/root}/.vscode-server"
   mkdir -p "$PERSISTED"
   if [[ -e "$SERVER_HOME" && ! -L "$SERVER_HOME" ]]; then
     cp -a "$SERVER_HOME/." "$PERSISTED/"
     rm -rf "$SERVER_HOME"
   fi
   ln -sfn "$PERSISTED" "$SERVER_HOME"
+
+  # Recreating the workspace wipes /workspaces too, so the image is the only
+  # copy that always survives. The server rebuilds extensions.json by scanning
+  # this directory, which is why dropping the folders in is enough.
+  if [[ -d /opt/vscode-extensions ]]; then
+    log "Seeding VS Code extensions from the image"
+    mkdir -p "$SERVER_HOME/extensions"
+    for seeded in /opt/vscode-extensions/*/; do
+      target="$SERVER_HOME/extensions/$(basename "$seeded")"
+      [[ -e "$target" ]] || cp -a "$seeded" "$target"
+    done
+  fi
 fi
 
 CREDENTIAL_FILE=/home/vscode/.config/sbt/buildbuddy_credential.txt

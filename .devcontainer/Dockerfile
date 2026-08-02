@@ -24,6 +24,25 @@ RUN DOCKER_ARCH="$( [ "${TARGETARCH}" = "arm64" ] && echo aarch64 || echo x86_64
 RUN echo 'export PATH="$HOME/.local/share/coursier/bin:$PATH"' \
       > /etc/profile.d/coursier.sh
 
+# Envbuilder on Coder never applies customizations.vscode, and the VS Code server
+# it talks to is installed on ephemeral storage after post-start.sh has run. Bake
+# the extensions into the image instead; post-start.sh copies them into the
+# server's extensions directory, which the server rescans on startup.
+ARG METALS_VERSION=1.69.0
+ARG SCALA_EXTENSION_VERSION=0.5.10
+RUN set -eu; \
+    mkdir -p /opt/vscode-extensions; \
+    seed_extension() { \
+      pub="$1"; name="$2"; ver="$3"; \
+      curl -fsSL -o /tmp/ext.vsix \
+        "https://open-vsx.org/api/$pub/$name/$ver/file/$pub.$name-$ver.vsix"; \
+      unzip -q /tmp/ext.vsix -d /tmp/ext; \
+      mv /tmp/ext/extension "/opt/vscode-extensions/$pub.$name-$ver"; \
+      rm -rf /tmp/ext /tmp/ext.vsix; \
+    }; \
+    seed_extension scalameta metals "${METALS_VERSION}"; \
+    seed_extension scala-lang scala "${SCALA_EXTENSION_VERSION}"
+
 USER vscode
 ENV COURSIER_BIN_DIR=/home/vscode/.local/share/coursier/bin
 ENV PATH="${COURSIER_BIN_DIR}:${PATH}"
