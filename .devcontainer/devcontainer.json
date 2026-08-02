@@ -10,7 +10,10 @@
     }
   },
   "containerEnv": {
-    "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal"
+    "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal",
+    "BUILDBUDDY_API_KEY": "${localEnv:BUILDBUDDY_API_KEY}",
+    "SBT_CONFIG_HOME": "/home/vscode/.config/sbt",
+    "SBT_LOCAL_CACHE": "/home/vscode/.cache/sbt"
   },
   "runArgs": [
     "--add-host=host.docker.internal:host-gateway"
@@ -52,7 +55,8 @@
   "mounts": [
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
     "source=apparatus-coursier-cache,target=/home/vscode/.cache/coursier,type=volume",
-    "source=apparatus-sbt-boot,target=/home/vscode/.sbt,type=volume",
+    "source=apparatus-sbt-cache,target=/home/vscode/.cache/sbt,type=volume",
+    "source=apparatus-sbt-config,target=/home/vscode/.config/sbt,type=volume",
     "source=apparatus-ivy2-cache,target=/home/vscode/.ivy2,type=volume"
   ]
 }

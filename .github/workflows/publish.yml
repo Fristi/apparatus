@@ -32,7 +32,8 @@ jobs:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           PGP_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: sbt "+publishSigned; sonatypeCentralUpload"
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: sbt "+publishSigned; sonaUpload"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
