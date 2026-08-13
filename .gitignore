@@ -6,6 +6,10 @@
 # sbt specific
 .cache
 .history
+.metals
+.vscode
+.bloop
+.claude
 .lib/
 dist/*
 target/

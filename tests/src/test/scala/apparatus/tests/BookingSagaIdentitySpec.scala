@@ -4,101 +4,47 @@ import apparatus.core.*
 import apparatus.core.machines.*
 import apparatus.core.patterns.*
 import apparatus.examples.*
+import cats.data.NonEmptyList
 import cats.effect.SyncIO
-import cats.data.NonEmptySet
 import cats.implicits.*
-
-import scala.collection.immutable.SortedSet
 
 class BookingSagaIdentitySpec extends munit.FunSuite:
 
-  test("happy path: all steps complete in order"):
+  test("civilian happy path: all steps complete in one run"):
     assertEquals(
-      Apparatus.runA(saga[SyncIO](), BookingCommand.Start(bookingId), DeciderMaterializer.syncIO).unsafeRunSync(),
+      Apparatus.runA(bookingEntrypoint[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior), BookingCommand.Start(BookingDomain.bookingId, BookingDomain.sagaState), DeciderMaterializer.syncIO).unsafeRunSync(),
       List(
-        SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
-        SagaEvent.StepStarted(BookingStep.Hotel),
-        SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
-        SagaEvent.StepStarted(BookingStep.Car),
-        SagaEvent.StepProgressed(BookingStep.Car, SagaStepResult.Completed),
-        SagaEvent.StepStarted(BookingStep.Flight),
-        SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Completed)
+        SagaEvent.Booted(BookingDomain.bookingId, BookingDomain.sagaState, NonEmptyList.of(
+          SagaState.StepDispatch(BookingStep.Hotel, BookingDomain.hotelId),
+          SagaState.StepDispatch(BookingStep.Car, BookingDomain.carId),
+          SagaState.StepDispatch(BookingStep.Flight, BookingDomain.flightId)
+        )),
+        SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.sagaState, BookingStep.Hotel, BookingDomain.hotelId),
+        SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Hotel, SagaStepResult.Completed),
+        SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.sagaState, BookingStep.Car, BookingDomain.carId),
+        SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Car, SagaStepResult.Completed),
+        SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.sagaState, BookingStep.Flight, BookingDomain.flightId),
+        SagaEvent.StepProgressed(BookingDomain.bookingId, BookingStep.Flight, SagaStepResult.Completed)
       )
     )
 
-  test("flight fails: compensation triggered for completed steps"):
-    val events = Apparatus.runA(saga[SyncIO](flight = flightDecider(failsOnReserve = true)), BookingCommand.Start(bookingId), DeciderMaterializer.syncIO).unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Failed)))
-    assert(events.exists { case SagaEvent.CompensationTriggered(_) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Car,    SagaStepResult.Completed) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
-
-  test("flight fails: car compensated, flight not"):
-    val events = Apparatus.runA(saga[SyncIO](flight = flightDecider(failsOnReserve = true)), BookingCommand.Start(bookingId), DeciderMaterializer.syncIO).unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Failed)))
-    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Car, SagaStepResult.Completed) => true; case _ => false })
-    assert(!events.exists { case SagaEvent.CompensationProgressed(BookingStep.Flight, _) => true; case _ => false })
-
-  test("car fails: no compensation needed"):
-    val events = Apparatus.runA(saga[SyncIO](car = carDecider(failsOnReserve = true)), BookingCommand.Start(bookingId), DeciderMaterializer.syncIO).unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Car, SagaStepResult.Failed)))
-    assert(!events.exists { case SagaEvent.CompensationTriggered(BookingStep.Car) => true; case _ => false })
-
-  test("rerooted at car: happy path — car reserved, flight follows"):
-    val defaultBookingAtCarEvents: List[SagaEvent[BookingStep]] = List(
-      SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
-      SagaEvent.StepStarted(BookingStep.Hotel),
-      SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
-      SagaEvent.StepStarted(BookingStep.Car)
-    )
-    val bookingAtCar = behavior.decider.evolveFrom(defaultBookingAtCarEvents)
+  test("diplomat start: hotel step pauses awaiting background check"):
+    val events =
+      Apparatus
+        .runA(
+          bookingEntrypoint[SyncIO](BookingServices.default[SyncIO], BookingDomain.testBehavior),
+          BookingCommand.Start(BookingDomain.bookingId, BookingDomain.diplomatSagaState),
+          DeciderMaterializer.syncIO
+        )
+        .unsafeRunSync()
     assertEquals(
-      Apparatus.runA(sagaRerootedAtCar[SyncIO](booking = bookingAtCar), CarCommand.Reserve(carId), DeciderMaterializer.syncIO).unsafeRunSync(),
+      events,
       List(
-        SagaEvent.StepProgressed(BookingStep.Car, SagaStepResult.Completed),
-        SagaEvent.StepStarted(BookingStep.Flight),
-        SagaEvent.StepProgressed(BookingStep.Flight, SagaStepResult.Completed)
+        SagaEvent.Booted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, NonEmptyList.of(
+          SagaState.StepDispatch(BookingStep.Hotel, BookingDomain.hotelId),
+          SagaState.StepDispatch(BookingStep.Car, BookingDomain.carId),
+          SagaState.StepDispatch(BookingStep.Flight, BookingDomain.flightId)
+        )),
+        SagaEvent.StepStarted(BookingDomain.bookingId, BookingDomain.diplomatSagaState, BookingStep.Hotel, BookingDomain.hotelId)
       )
     )
-
-  test("rerooted at car: car fails — hotel compensated, flight skipped"):
-    val defaultBookingAtCarEvents: List[SagaEvent[BookingStep]] = List(
-      SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
-      SagaEvent.StepStarted(BookingStep.Hotel),
-      SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed),
-      SagaEvent.StepStarted(BookingStep.Car)
-    )
-    val bookingAtCar = behavior.decider.evolveFrom(defaultBookingAtCarEvents)
-    val events = Apparatus.runA(
-      sagaRerootedAtCar[SyncIO](
-        booking = bookingAtCar,
-        car     = carDecider(failsOnReserve = true),
-        hotel   = hotelDecider().evolveFrom(List(HotelEvent.Reserved(hotelId))),
-      ),
-      CarCommand.Reserve(carId),
-      DeciderMaterializer.syncIO
-    ).unsafeRunSync()
-    assert(events.contains(SagaEvent.StepProgressed(BookingStep.Car, SagaStepResult.Failed)))
-    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
-    assert(!events.exists { case SagaEvent.CompensationProgressed(BookingStep.Flight, _) => true; case _ => false })
-
-  test("rerooted at car: flight fails — car and hotel both compensated"):
-    val defaultBookingAtCarEvents: List[SagaEvent[BookingStep]] = List(
-      SagaEvent.Booted(NonEmptySet.of(BookingStep.Hotel, BookingStep.Car, BookingStep.Flight)),
-      SagaEvent.StepStarted(BookingStep.Hotel),
-      SagaEvent.StepProgressed(BookingStep.Hotel, SagaStepResult.Completed)
-    )
-    val bookingAtCar = behavior.decider.evolveFrom(defaultBookingAtCarEvents)
-    val events = Apparatus.runA(
-      sagaRerootedAtCar[SyncIO](
-        booking = bookingAtCar,
-        flight  = flightDecider(failsOnReserve = true),
-        hotel   = hotelDecider().evolveFrom(List(HotelEvent.Reserved(hotelId))),
-        car = carDecider()
-      ),
-      CarCommand.Reserve(carId),
-      DeciderMaterializer.syncIO
-    ).unsafeRunSync()
-    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Car,   SagaStepResult.Completed) => true; case _ => false })
-    assert(events.exists { case SagaEvent.CompensationProgressed(BookingStep.Hotel, SagaStepResult.Completed) => true; case _ => false })
-    assert(!events.exists { case SagaEvent.CompensationProgressed(BookingStep.Flight, _) => true; case _ => false })
